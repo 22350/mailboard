@@ -94,9 +94,11 @@ a { color: var(--accent); }
 }
 .column.drop { background: var(--drop); border-color: var(--accent); }
 .column h2 { font-size: 1rem; margin: 0; padding: .8rem 1rem; display: flex; gap: .5rem; align-items: center; }
-.column .count { margin-left: auto; color: var(--muted); font-weight: normal; }
-.column h2 .icon-btn { width: 30px; min-height: 30px; font-size: .95rem; opacity: .55; }
-.column h2 .icon-btn:hover { opacity: 1; }
+.column h2 { background: #373a2b; color: #eef0e4; border-radius: 10px 10px 0 0; margin-bottom: .6rem; }
+.column .count { margin-left: auto; color: #c3c7b2; font-weight: normal; }
+.column h2 .icon-btn { width: 30px; min-height: 30px; font-size: .95rem; color: #eef0e4; opacity: .65; }
+.column h2 .icon-btn:hover:not(:disabled) { opacity: 1; background: rgba(255,255,255,.14); }
+.column h2 .pick { accent-color: #9fbf5a; }
 .add-column { flex: 0 0 auto; display: flex; align-items: flex-start; }
 .add-btn {
   width: 52px; min-height: 52px; font-size: 1.7rem; line-height: 1; border-radius: 12px;
