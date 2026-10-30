@@ -21,12 +21,13 @@ const store = {
 
 const settings = {
   clientId: store.get('clientId', ''),
+  inboxName: store.get('inboxName', 'Inbox'),
   columns: store.get('columns', ['To Do', 'Waiting', 'Done']),
   lastArchives: store.get('lastArchives', true),
 };
 
 function columns() {
-  const cols = [{ name: 'Inbox', inbox: true }];
+  const cols = [{ name: settings.inboxName, inbox: true }];
   settings.columns.forEach((name, i) =>
     cols.push({ name, archive: settings.lastArchives && i === settings.columns.length - 1 }));
   return cols;
@@ -39,6 +40,7 @@ const state = {
   labelIds: {},        // column name -> Gmail label id
   threads: new Map(),  // thread id -> summary
   board: [],           // per column: sorted thread ids
+  more: [],            // per column: Gmail has more than we fetched
   openId: null,
   dragging: false,
   loading: false,
@@ -169,14 +171,22 @@ function summarize(t) {
   const msgs = t.messages || [];
   const last = msgs[msgs.length - 1] || {};
   const labels = new Set(msgs.flatMap((m) => m.labelIds || []));
+  const people = [];
+  for (const m of msgs) {
+    const from = header(m, 'from');
+    const name = addrOf(from) === state.me.toLowerCase() ? 'me' : displayName(from);
+    if (!people.includes(name)) people.push(name);
+  }
   return {
     id: t.id,
     historyId: t.historyId,
     subject: header(msgs[0] || {}, 'subject') || '(no subject)',
-    from: displayName(header(last, 'from')),
+    people: people.join(', '),
     snippet: decodeEntities(last.snippet || ''),
     date: Number(last.internalDate || 0),
     count: msgs.length,
+    replied: (last.labelIds || []).includes('SENT'),
+    attachments: msgs.filter((m) => /multipart\/mixed/i.test(header(m, 'content-type'))).length,
     unread: labels.has('UNREAD'),
     labels,
   };
@@ -214,15 +224,16 @@ async function loadBoard() {
         maxResults: col.archive ? '30' : '100',
         labelIds: col.inbox ? 'INBOX' : state.labelIds[col.name],
       });
-      return api('/threads?' + p).then((r) => r.threads || []);
+      return api('/threads?' + p);
     }));
+    state.more = lists.map((r) => !!r.nextPageToken);
     const seen = new Map();
-    for (const t of lists.flat()) seen.set(t.id, t.historyId);
+    for (const t of lists.flatMap((r) => r.threads || [])) seen.set(t.id, t.historyId);
     const stale = [...seen].filter(([id, h]) => state.threads.get(id)?.historyId !== h).map(([id]) => id);
     if (stale.length > 10) setStatus(`Loading ${stale.length} conversations…`);
     await mapLimit(stale, 5, async (id) => {
       try {
-        const t = await api(`/threads/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`);
+        const t = await api(`/threads/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Content-Type`);
         state.threads.set(id, summarize(t));
       } catch (e) {
         if (e instanceof AuthError) throw e;
@@ -280,6 +291,50 @@ async function moveWithUndo(id, colIdx) {
   if (prev === colIdx) return;
   if (await moveThread(id, colIdx)) {
     toast(`Moved to ${cols[colIdx].name}`, prev < 0 ? null : { label: 'Undo', run: () => moveThread(id, prev) });
+  }
+}
+
+// Archive = drop into the archiving column (Done) when there is one,
+// otherwise take the thread out of the Inbox and off the board.
+async function archiveThread(id) {
+  const cols = columns();
+  const doneIdx = cols.findIndex((c) => c.archive);
+  if (doneIdx >= 0) return moveWithUndo(id, doneIdx);
+  const t = state.threads.get(id);
+  if (!t) return;
+  const remove = ['INBOX', ...cols.slice(1).map((c) => state.labelIds[c.name])].filter((l) => t.labels.has(l));
+  const apply = async (add, rem) => {
+    add.forEach((l) => t.labels.add(l));
+    rem.forEach((l) => t.labels.delete(l));
+    assign(cols);
+    render();
+    await api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: add, removeLabelIds: rem } });
+  };
+  try {
+    await apply([], remove);
+    toast('Archived', { label: 'Undo', run: () => apply(remove, []).catch((e) => toast(e.message)) });
+  } catch (e) {
+    if (!(e instanceof AuthError)) toast('Could not archive: ' + e.message);
+  }
+}
+
+async function toggleRead(id) {
+  const t = state.threads.get(id);
+  if (!t) return;
+  const unread = !t.unread;
+  t.unread = unread;
+  if (unread) t.labels.add('UNREAD'); else t.labels.delete('UNREAD');
+  render();
+  try {
+    await api(`/threads/${id}/modify`, {
+      method: 'POST',
+      body: unread ? { addLabelIds: ['UNREAD'] } : { removeLabelIds: ['UNREAD'] },
+    });
+  } catch (e) {
+    t.unread = !unread;
+    if (unread) t.labels.delete('UNREAD'); else t.labels.add('UNREAD');
+    render();
+    if (!(e instanceof AuthError)) toast('Could not update: ' + e.message);
   }
 }
 
@@ -372,6 +427,33 @@ function el(tag, attrs = {}, children = []) {
   return node;
 }
 
+const ICONS = {
+  archive: 'M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z',
+  trash: 'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z',
+  unread: 'M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z',
+  read: 'M21.99 8c0-.72-.37-1.35-.94-1.7L12 1 2.95 6.3C2.38 6.65 2 7.28 2 8v10c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2l-.01-10zM12 13L3.74 7.84 12 3l8.26 4.84L12 13z',
+  replied: 'M18 7l-1.41-1.41-6.34 6.34 1.41 1.41L18 7zm4.24-1.41L11.66 16.17 7.48 12l-1.41 1.41L11.66 19l12-12-1.42-1.41zM.41 13.41L6 19l1.41-1.41L1.83 12 .41 13.41z',
+  clip: 'M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z',
+};
+
+function icon(name, cls) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  if (cls) svg.setAttribute('class', cls);
+  const path = document.createElementNS(NS, 'path');
+  path.setAttribute('d', ICONS[name]);
+  svg.append(path);
+  return svg;
+}
+
+function iconButton(label, name, run) {
+  const b = el('button', { class: 'icon-btn', title: label, 'aria-label': label, draggable: 'false' }, icon(name));
+  b.addEventListener('click', (e) => { e.stopPropagation(); run(); });
+  return b;
+}
+
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
@@ -430,7 +512,7 @@ function renderColumn(col, i) {
   const ids = state.board[i] || [];
   const node = el('section', { class: 'column', 'data-col': i }, [
     el('h2', {}, [el('span', { class: 'key', title: `Press ${i + 1} to move the selected card here` }, String(i + 1)),
-      col.name, el('span', { class: 'count' }, String(ids.length))]),
+      col.name, el('span', { class: 'count' }, ids.length + (state.more[i] ? '+' : ''))]),
     el('div', { class: 'cards' }, ids.map((id) => renderCard(state.threads.get(id), i))),
   ]);
   node.addEventListener('dragover', (e) => { e.preventDefault(); node.classList.add('drop'); });
@@ -450,9 +532,24 @@ function renderCard(t, colIdx) {
     class: 'card' + (t.unread ? ' unread' : '') + (t.id === state.openId ? ' open' : ''),
     tabindex: '0', draggable: 'true', 'data-id': t.id, 'data-col': colIdx,
   }, [
-    el('div', { class: 'meta' }, [el('span', { class: 'from' }, t.from), el('time', {}, dateLabel(t.date))]),
-    el('div', { class: 'subject' }, t.subject + (t.count > 1 ? ` (${t.count})` : '')),
-    el('div', { class: 'snippet' }, t.snippet),
+    el('div', { class: 'top' }, [
+      el('span', { class: 'people' }, t.people),
+      t.count > 1 ? el('span', { class: 'num' }, String(t.count)) : null,
+      el('time', {}, dateLabel(t.date)),
+    ]),
+    el('div', { class: 'body' }, [
+      t.replied ? icon('replied', 'replied') : null,
+      el('span', { class: 'subj' }, t.subject),
+      t.snippet ? ' - ' + t.snippet : '',
+    ]),
+    t.attachments ? el('div', { class: 'clip' }, [icon('clip'), String(t.attachments)]) : null,
+    el('div', { class: 'card-actions' }, [
+      iconButton('Archive', 'archive', () => archiveThread(t.id)),
+      iconButton('Delete', 'trash', () => trashThread(t.id)),
+      t.unread
+        ? iconButton('Mark as read', 'read', () => toggleRead(t.id))
+        : iconButton('Mark as unread', 'unread', () => toggleRead(t.id)),
+    ]),
   ]);
   card.addEventListener('dragstart', (e) => {
     state.dragging = true;
@@ -690,7 +787,7 @@ function closeReader() {
 // ---------- settings & wiring ----------
 
 function openSettings() {
-  $('#set-columns').value = settings.columns.join('\n');
+  $('#set-columns').value = [settings.inboxName, ...settings.columns].join('\n');
   $('#set-archive').checked = settings.lastArchives;
   $('#set-client').value = settings.clientId;
   $('#settings').showModal();
@@ -699,11 +796,12 @@ function openSettings() {
 function saveSettings() {
   const names = [...new Set($('#set-columns').value.split('\n')
     .map((s) => s.replace(/\//g, '-').trim())
-    .filter((s) => s && s.toLowerCase() !== 'inbox'))].slice(0, 8);
-  if (!names.length) { toast('Keep at least one column besides Inbox.'); return; }
-  settings.columns = names;
+    .filter(Boolean))].slice(0, 9);
+  if (names.length < 2) { toast('Keep at least two columns.'); return; }
+  [settings.inboxName, ...settings.columns] = names;
   settings.lastArchives = $('#set-archive').checked;
-  store.set('columns', names);
+  store.set('inboxName', settings.inboxName);
+  store.set('columns', settings.columns);
   store.set('lastArchives', settings.lastArchives);
   const clientId = $('#set-client').value.trim();
   if (clientId && clientId !== settings.clientId) {
@@ -729,6 +827,10 @@ function onKey(e) {
   } else if (e.key === 'Enter') {
     e.preventDefault();
     openThread(id);
+  } else if (e.key === 'e') {
+    archiveThread(id);
+  } else if (e.key === 'u') {
+    toggleRead(id);
   } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();
     (e.key === 'ArrowDown' ? card.nextElementSibling : card.previousElementSibling)?.focus();
