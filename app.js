@@ -53,7 +53,12 @@ const state = {
   threads: new Map(),  // thread id -> summary
   board: [],           // per column: sorted thread ids
   more: [],            // per column: Gmail has more than we fetched
-  search: null,        // { q, ids, more } while search results are shown
+  search: null,        // { q, title, ids, more } while a search or folder is shown
+  searchSeq: 0,        // bumps per search so a slow, older one can't overwrite a newer one
+  folder: null,        // sidebar folder or label being shown, by name
+  userLabels: [],      // the user's own Gmail labels, for the sidebar
+  labelCounts: {},     // label id -> Gmail label (with unread/total counts)
+  sidebarOpen: store.get('sidebar', window.innerWidth > 800),
   addingColumn: false, // the "new column" name box is open; don't re-render under it
   openId: null,
   dragging: false,
@@ -118,7 +123,7 @@ function signIn() {
 function needSignIn() {
   state.token = null;
   try { sessionStorage.removeItem('token'); } catch {}
-  if ($('#board').hidden) show('signin');
+  if ($('#main-row').hidden) show('signin');
   else $('#banner').hidden = false;
 }
 
@@ -163,6 +168,9 @@ async function ensureLabels(cols) {
   const { labels = [] } = await api('/labels');
   const byName = Object.fromEntries(labels.map((l) => [l.name, l.id]));
   for (const c of COLORS) if (byName[COLOR_PREFIX + c.name]) state.colorIds[c.name] = byName[COLOR_PREFIX + c.name];
+  state.userLabels = labels
+    .filter((l) => l.type === 'user' && !l.name.startsWith(LABEL_PREFIX))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   for (const col of cols) {
     if (col.inbox) continue;
     const name = LABEL_PREFIX + col.name;
@@ -247,29 +255,108 @@ async function fetchSummaries(listed) {
   return ok;
 }
 
-async function runSearch(q) {
-  q = q.trim();
-  if (!q) { clearSearch(); return; }
-  setStatus('Searching…');
+// Show a search, or a sidebar folder, as the extra column left of the board.
+async function runSearch(q, folder) {
+  q = (q || '').trim();
+  if (!q && !folder) { clearSearch(); return; }
+  const seq = ++state.searchSeq;
+  state.folder = folder ? folder.name : null;
+  if (folder) $('#search').value = '';
+  renderSidebar();
+  setStatus(folder ? 'Loading…' : 'Searching…');
   try {
-    const r = await api('/threads?' + new URLSearchParams({ q, maxResults: '50' }));
+    const p = new URLSearchParams({ maxResults: '50' });
+    if (folder?.q || q) p.set('q', folder?.q || q);
+    if (folder?.label) p.set('labelIds', folder.label);
+    if (folder?.spamTrash) p.set('includeSpamTrash', 'true');
+    const r = await api('/threads?' + p);
     const listed = r.threads || [];
     const ok = await fetchSummaries(listed);
-    state.search = { q, ids: listed.map((t) => t.id).filter((id) => ok.has(id)), more: !!r.nextPageToken };
+    if (seq !== state.searchSeq) return; // a newer search or folder click won
+    state.search = {
+      q, title: folder?.name,
+      ids: listed.map((t) => t.id).filter((id) => ok.has(id)),
+      more: !!r.nextPageToken,
+    };
     assign(columns());
     render();
     $('#board').scrollLeft = 0;
     setStatus('');
   } catch (e) {
-    if (!(e instanceof AuthError)) toast('Search failed: ' + e.message);
+    if (!(e instanceof AuthError)) toast('Could not load: ' + e.message);
     setStatus('');
   }
 }
 
 function clearSearch() {
+  state.searchSeq++;
   state.search = null;
+  state.folder = null;
   $('#search').value = '';
   render();
+  renderSidebar();
+}
+
+// ---------- sidebar ----------
+
+const FOLDERS = [
+  { name: 'Inbox', icon: 'inbox', label: 'INBOX', count: 'unread', board: true },
+  { name: 'Snoozed', icon: 'clock', q: 'in:snoozed' },
+  { name: 'Sent', icon: 'send', label: 'SENT' },
+  { name: 'Drafts', icon: 'draft', label: 'DRAFT', count: 'total' },
+  { name: 'All Mail', icon: 'allmail' },
+  { name: 'Spam', icon: 'spam', label: 'SPAM', count: 'unread', spamTrash: true },
+  { name: 'Trash', icon: 'trash', label: 'TRASH', spamTrash: true },
+  { name: 'Purchases', icon: 'bag', q: 'category:purchases' },
+  { name: 'Promotions', icon: 'offer', label: 'CATEGORY_PROMOTIONS', count: 'unread' },
+  { name: 'Starred', icon: 'star', label: 'STARRED' },
+  { name: 'Important', icon: 'important', label: 'IMPORTANT' },
+  { name: 'Scheduled', icon: 'clock', q: 'in:scheduled' },
+];
+
+async function loadCounts() {
+  const ids = [
+    ...FOLDERS.filter((f) => f.count).map((f) => f.label),
+    ...state.userLabels.slice(0, 40).map((l) => l.id),
+  ];
+  const got = await Promise.all(ids.map((id) =>
+    api(`/labels/${encodeURIComponent(id)}`).catch((e) => { if (e instanceof AuthError) throw e; return null; })));
+  for (const l of got) if (l) state.labelCounts[l.id] = l;
+  renderSidebar();
+}
+
+function navItem(name, iconName, n, active, onClick) {
+  const b = el('button', { class: 'nav-item' + (active ? ' active' : '') + (n ? ' has-count' : '') }, [
+    icon(iconName), el('span', { class: 'nav-name' }, name), n ? el('span', { class: 'n' }, n.toLocaleString()) : null,
+  ]);
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function renderSidebar() {
+  const nav = $('#sidebar');
+  if (!nav) return;
+  const counts = state.labelCounts;
+  const items = FOLDERS.map((f) => {
+    const c = f.label && counts[f.label];
+    const n = !c ? 0 : f.count === 'total' ? c.messagesTotal : f.count === 'unread' ? c.threadsUnread : 0;
+    const active = f.board ? !state.search : state.folder === f.name;
+    return navItem(f.name, f.icon, n, active, () => (f.board ? clearSearch() : runSearch('', f)));
+  });
+  const labels = state.userLabels.map((l) =>
+    navItem(l.name, 'label', counts[l.id]?.threadsUnread || 0, state.folder === l.name,
+      () => runSearch('', { name: l.name, label: l.id })));
+  nav.replaceChildren(
+    ...items,
+    labels.length ? el('div', { class: 'nav-head' }, 'Labels') : null,
+    ...labels,
+  );
+}
+
+function setSidebar(open) {
+  state.sidebarOpen = open;
+  store.set('sidebar', open);
+  $('#sidebar').hidden = !open;
 }
 
 async function loadBoard() {
@@ -296,6 +383,7 @@ async function loadBoard() {
     render();
     state.lastLoad = Date.now();
     setStatus('Updated ' + dateLabel(Date.now()));
+    await loadCounts();
   } catch (e) {
     if (!(e instanceof AuthError)) toast('Could not load mail: ' + e.message);
     setStatus('');
@@ -314,6 +402,8 @@ async function moveThread(id, colIdx) {
   const remove = cols.slice(1).map((c) => state.labelIds[c.name]).filter((l) => l !== targetLabel);
   if (!target.inbox) add.push(targetLabel);
   if (target.archive) remove.push('INBOX'); else add.push('INBOX');
+  // Dragging out of the Spam or Trash folder rescues the thread.
+  for (const l of ['SPAM', 'TRASH']) if (t.labels.has(l)) remove.push(l);
 
   const before = new Set(t.labels);
   add.forEach((l) => t.labels.add(l));
@@ -578,6 +668,16 @@ const ICONS = {
   unread: 'M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z',
   read: 'M21.99 8c0-.72-.37-1.35-.94-1.7L12 1 2.95 6.3C2.38 6.65 2 7.28 2 8v10c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2l-.01-10zM12 13L3.74 7.84 12 3l8.26 4.84L12 13z',
   replied: 'M18 7l-1.41-1.41-6.34 6.34 1.41 1.41L18 7zm4.24-1.41L11.66 16.17 7.48 12l-1.41 1.41L11.66 19l12-12-1.42-1.41zM.41 13.41L6 19l1.41-1.41L1.83 12 .41 13.41z',
+  inbox: 'M19 3H4.99c-1.11 0-1.98.89-1.98 2L3 19c0 1.1.88 2 1.99 2H19c1.1 0 2-.9 2-2V5c0-1.11-.9-2-2-2zm0 12h-4c0 1.66-1.35 3-3 3s-3-1.34-3-3H4.99V5H19v10z',
+  clock: 'M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z',
+  send: 'M4.01 6.03l7.51 3.22-7.52-1 .01-2.22m7.5 8.72L4 17.97v-2.22l7.51-1M2.01 3L2 10l15 2-15 2 .01 7L23 12 2.01 3z',
+  draft: 'M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zM6 20V4h7v5h5v11H6z',
+  allmail: 'M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V8l8 5 8-5v10zm-8-7L4 6h16l-8 5z',
+  bag: 'M18 6h-2c0-2.21-1.79-4-4-4S8 3.79 8 6H6c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-6-2c1.1 0 2 .9 2 2h-4c0-1.1.9-2 2-2zm6 16H6V8h2v2c0 .55.45 1 1 1s1-.45 1-1V8h4v2c0 .55.45 1 1 1s1-.45 1-1V8h2v12z',
+  offer: 'M21.41 11.58l-9-9C12.05 2.22 11.55 2 11 2H4c-1.1 0-2 .9-2 2v7c0 .55.22 1.05.59 1.42l9 9c.36.36.86.58 1.41.58s1.05-.22 1.41-.59l7-7c.37-.36.59-.86.59-1.41s-.23-1.06-.59-1.42zM13 20.01L4 11V4h7v-.01l9 9-7 7.02zM6.5 5C5.67 5 5 5.67 5 6.5S5.67 8 6.5 8 8 7.33 8 6.5 7.33 5 6.5 5z',
+  star: 'M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.04 4.38.38-3.32 2.88 1 4.28L12 15.4z',
+  important: 'M15 19H3l4.5-7L3 5h12c.65 0 1.26.31 1.63.84L21 12l-4.37 6.16c-.37.52-.98.84-1.63.84zm-8.5-2H15l3.5-5L15 7H6.5l3.5 5-3.5 5z',
+  label: 'M17.63 5.84C17.27 5.33 16.67 5 16 5L5 5.01C3.9 5.01 3 5.9 3 7v10c0 1.1.9 1.99 2 1.99L16 19c.67 0 1.27-.33 1.63-.84L22 12l-4.37-6.16zM16 17H5V7h11l3.55 5L16 17z',
   spam: 'M15.73 3H8.27L3 8.27v7.46L8.27 21h7.46L21 15.73V8.27L15.73 3zM12 17.3c-.72 0-1.3-.58-1.3-1.3 0-.72.58-1.3 1.3-1.3.72 0 1.3.58 1.3 1.3 0 .72-.58 1.3-1.3 1.3zm1-4.3h-2V7h2v6z',
   palette: 'M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5s1.5.67 1.5 1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z',
   clip: 'M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z',
@@ -641,8 +741,12 @@ function toast(msg, action) {
 }
 
 function show(view) {
-  for (const id of ['board', 'signin', 'setup']) $('#' + id).hidden = id !== view;
-  $('#btn-compose').hidden = $('#btn-refresh').hidden = $('#search-form').hidden = view !== 'board';
+  $('#main-row').hidden = view !== 'board';
+  $('#signin').hidden = view !== 'signin';
+  $('#setup').hidden = view !== 'setup';
+  for (const id of ['btn-compose', 'btn-refresh', 'search-form', 'btn-menu']) $('#' + id).hidden = view !== 'board';
+  $('#sidebar').hidden = !state.sidebarOpen;
+  if (view === 'board') renderSidebar();
 }
 
 function render() {
@@ -712,14 +816,14 @@ function renderAddColumn() {
 }
 
 function renderSearchColumn() {
-  const { q, ids, more } = state.search;
-  const close = el('button', { class: 'icon-btn', title: 'Close search', 'aria-label': 'Close search' }, '✕');
+  const { q, title, ids, more } = state.search;
+  const close = el('button', { class: 'icon-btn', title: 'Close', 'aria-label': 'Close' }, '✕');
   close.addEventListener('click', clearSearch);
   return el('section', { class: 'column search', 'data-col': '-1' }, [
-    el('h2', {}, [el('span', { class: 'q' }, `“${q}”`), el('span', { class: 'count' }, ids.length + (more ? '+' : '')), close]),
+    el('h2', {}, [el('span', { class: 'q' }, title || `“${q}”`), el('span', { class: 'count' }, ids.length + (more ? '+' : '')), close]),
     el('div', { class: 'cards' }, ids.length
       ? ids.map((id) => renderCard(state.threads.get(id), -1))
-      : el('p', { class: 'hint' }, 'No matches.')),
+      : el('p', { class: 'hint' }, title ? 'Nothing here.' : 'No matches.')),
   ]);
 }
 
@@ -748,7 +852,9 @@ function renderCard(t, colIdx) {
   if (colIdx < 0) { // search result: show which column it lives in
     const cols = columns();
     const c = columnOf(t, cols);
-    where = el('span', { class: 'where' }, c >= 0 ? cols[c].name : 'Archived');
+    const place = c >= 0 ? cols[c].name
+      : t.labels.has('TRASH') ? 'Trash' : t.labels.has('SPAM') ? 'Spam' : 'Archived';
+    where = el('span', { class: 'where' }, place);
   }
   const card = el('article', {
     class: 'card' + (t.unread ? ' unread' : '') + (t.id === state.openId ? ' open' : '') + (color ? ' colored' : ''),
@@ -1153,6 +1259,7 @@ function wireUi() {
   $('#banner-btn').addEventListener('click', signIn);
   $('#btn-refresh').addEventListener('click', loadBoard);
   $('#btn-compose').addEventListener('click', openCompose);
+  $('#btn-menu').addEventListener('click', () => setSidebar(!state.sidebarOpen));
   $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); runSearch($('#search').value); });
   $('#search').addEventListener('keydown', (e) => { if (e.key === 'Escape') clearSearch(); });
   // The browser's built-in ✕ in the search box empties it without submitting.
