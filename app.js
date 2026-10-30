@@ -726,8 +726,7 @@ function renderSearchColumn() {
 function renderColumn(col, i) {
   const ids = state.board[i] || [];
   const node = el('section', { class: 'column', 'data-col': i }, [
-    el('h2', {}, [el('span', { class: 'key', title: `Press ${i + 1} to move the selected card here` }, String(i + 1)),
-      col.name, el('span', { class: 'count' }, ids.length + (state.more[i] ? '+' : '')),
+    el('h2', {}, [col.name, el('span', { class: 'count' }, ids.length + (state.more[i] ? '+' : '')),
       i > 0 ? iconButton(`Remove column “${col.name}”`, null, () => removeColumn(i), '✕') : null]),
     el('div', { class: 'cards' }, ids.map((id) => renderCard(state.threads.get(id), i))),
   ]);

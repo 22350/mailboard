@@ -33,8 +33,22 @@ input, textarea {
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 a { color: var(--accent); }
 
-.bar { display: flex; align-items: center; gap: .6rem; padding: .6rem 1rem; border-bottom: 1px solid var(--border); background: var(--panel); }
+.bar {
+  --bar-bg: #373a2b; --bar-text: #eef0e4; --bar-muted: #c3c7b2;
+  display: flex; align-items: center; gap: .6rem; padding: .6rem 1rem;
+  background: var(--bar-bg); color: var(--bar-text);
+}
 .bar h1 { font-size: 1.15rem; margin: 0; }
+.bar .status { color: var(--bar-muted); }
+.bar button {
+  background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.22); color: var(--bar-text);
+}
+.bar button:hover:not(:disabled) { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.45); }
+.bar .search-box input {
+  background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.22); color: var(--bar-text);
+}
+.bar .search-box input::placeholder { color: var(--bar-muted); }
+.bar :focus-visible { outline-color: #d9e8a6; }
 .status { color: var(--muted); font-size: .9rem; }
 .search-box { flex: 0 1 360px; min-width: 0; }
 .search-box input { padding: .45rem .8rem; border-radius: 20px; }
@@ -57,7 +71,6 @@ a { color: var(--accent); }
 }
 .column.drop { background: var(--drop); border-color: var(--accent); }
 .column h2 { font-size: 1rem; margin: 0; padding: .8rem 1rem; display: flex; gap: .5rem; align-items: center; }
-.column .key { font-size: .75rem; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 .35rem; }
 .column .count { margin-left: auto; color: var(--muted); font-weight: normal; }
 .column h2 .icon-btn { width: 30px; min-height: 30px; font-size: .95rem; opacity: .55; }
 .column h2 .icon-btn:hover { opacity: 1; }
