@@ -1250,19 +1250,66 @@ function renderSearchColumn() {
   ]);
 }
 
+const COLUMN_DRAG = 'application/x-mailboard-column';
+
+// Columns other than the inbox (and the archiving column, which stays last)
+// can be reordered by dragging their header.
+const columnMovable = (col, i) => i > 0 && !col.archive;
+
+function moveColumn(from, to, after) {
+  const list = [...settings.columns];
+  const [moved] = list.splice(from - 1, 1);
+  let at = list.indexOf(settings.columns[to - 1]);
+  if (after) at++;
+  list.splice(at, 0, moved);
+  saveColumnList(list);
+}
+
 function renderColumn(col, i) {
   const ids = state.board[i] || [];
+  const head = el('h2', {}, [columnCheckbox(i), col.name, el('span', { class: 'count' }, ids.length + (state.more[i] ? '+' : '')),
+    i > 0 ? iconButton(`Remove column “${col.name}”`, null, () => removeColumn(i), '✕') : null]);
   const node = el('section', { class: 'column', 'data-col': i }, [
-    el('h2', {}, [columnCheckbox(i), col.name, el('span', { class: 'count' }, ids.length + (state.more[i] ? '+' : '')),
-      i > 0 ? iconButton(`Remove column “${col.name}”`, null, () => removeColumn(i), '✕') : null]),
+    head,
     el('div', { class: 'cards' }, ids.map((id) => renderCard(state.threads.get(id), i))),
   ]);
-  node.addEventListener('dragover', (e) => { e.preventDefault(); node.classList.add('drop'); });
-  node.addEventListener('dragleave', (e) => { if (!node.contains(e.relatedTarget)) node.classList.remove('drop'); });
+  const clearMarks = () => node.classList.remove('drop', 'insert-before', 'insert-after');
+  if (columnMovable(col, i)) {
+    head.draggable = true;
+    head.classList.add('grab');
+    head.title = 'Drag to move this column';
+    head.addEventListener('dragstart', (e) => {
+      state.dragging = true;
+      e.dataTransfer.setData(COLUMN_DRAG, String(i));
+      e.dataTransfer.effectAllowed = 'move';
+      node.classList.add('dragging-col');
+    });
+    head.addEventListener('dragend', () => { state.dragging = false; node.classList.remove('dragging-col'); });
+  }
+  node.addEventListener('dragover', (e) => {
+    if (e.dataTransfer.types.includes(COLUMN_DRAG)) {
+      if (!columnMovable(col, i)) return; // not a place a column can go
+      e.preventDefault();
+      const r = node.getBoundingClientRect();
+      const after = e.clientX > r.left + r.width / 2;
+      node.classList.toggle('insert-after', after);
+      node.classList.toggle('insert-before', !after);
+      return;
+    }
+    e.preventDefault();
+    node.classList.add('drop');
+  });
+  node.addEventListener('dragleave', (e) => { if (!node.contains(e.relatedTarget)) clearMarks(); });
   node.addEventListener('drop', (e) => {
     e.preventDefault();
-    node.classList.remove('drop');
+    const after = node.classList.contains('insert-after');
+    clearMarks();
     state.dragging = false;
+    const from = e.dataTransfer.getData(COLUMN_DRAG);
+    if (from) {
+      if (Number(from) !== i) moveColumn(Number(from), i, after);
+      return;
+    }
     const id = e.dataTransfer.getData('text/plain');
     if (!id) return;
     // Dragging one of several checked cards moves them all.
