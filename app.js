@@ -231,13 +231,43 @@ function columnOf(t, cols) {
   return t.labels.has('INBOX') ? 0 : -1;
 }
 
+const byText = (f) => (a, b) => f(a).localeCompare(f(b), undefined, { sensitivity: 'base' }) || b.date - a.date;
+const SORTS = [
+  { key: 'newest', label: 'Newest first', cmp: (a, b) => b.date - a.date },
+  { key: 'oldest', label: 'Oldest first', cmp: (a, b) => a.date - b.date },
+  { key: 'unread', label: 'Unread first', cmp: (a, b) => b.unread - a.unread || b.date - a.date },
+  { key: 'sender', label: 'Sender A–Z', cmp: byText((t) => t.people) },
+  { key: 'subject', label: 'Subject A–Z', cmp: byText((t) => t.subject) },
+];
+// Per-column sort, by column name, kept in this browser.
+const columnSorts = store.get('sorts', {});
+const sortOf = (col) => SORTS.find((s) => s.key === columnSorts[col.name]) || SORTS[0];
+
+function setSort(col, key) {
+  if (key === 'newest') delete columnSorts[col.name]; else columnSorts[col.name] = key;
+  store.set('sorts', columnSorts);
+  assign(columns());
+  render();
+}
+
+function openSortMenu(anchor, col) {
+  const current = sortOf(col).key;
+  openMenu(anchor, [
+    { heading: 'Sort' },
+    ...SORTS.map((s) => ({ label: s.label, checked: s.key === current, run: () => setSort(col, s.key) })),
+  ]);
+}
+
 function assign(cols) {
   state.board = cols.map(() => []);
   for (const t of state.threads.values()) {
     const c = columnOf(t, cols);
     if (c >= 0) state.board[c].push(t.id);
   }
-  for (const list of state.board) list.sort((a, b) => state.threads.get(b).date - state.threads.get(a).date);
+  state.board.forEach((list, i) => {
+    const { cmp } = sortOf(cols[i]);
+    list.sort((a, b) => cmp(state.threads.get(a), state.threads.get(b)));
+  });
 }
 
 const metadataPath = (id) =>
@@ -1152,6 +1182,7 @@ function el(tag, attrs = {}, children = []) {
 }
 
 const ICONS = {
+  sort: 'M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z',
   archive: 'M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z',
   trash: 'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z',
   unread: 'M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z',
@@ -1334,7 +1365,11 @@ function moveColumn(from, to, after) {
 
 function renderColumn(col, i) {
   const ids = state.board[i] || [];
+  const sort = sortOf(col);
+  const sortBtn = iconButton(`Sort: ${sort.label}`, 'sort', (b) => openSortMenu(b, col));
+  if (sort.key !== 'newest') sortBtn.classList.add('on');
   const head = el('h2', {}, [columnCheckbox(i), col.name, el('span', { class: 'count' }, ids.length + (state.more[i] ? '+' : '')),
+    sortBtn,
     i > 0 ? iconButton(`Remove column “${col.name}”`, null, () => removeColumn(i), '✕') : null]);
   const node = el('section', { class: 'column', 'data-col': i }, [
     head,
@@ -1728,6 +1763,11 @@ function readSettingsForm() {
 }
 
 async function renameLabel(oldName, newName) {
+  if (columnSorts[oldName]) {
+    columnSorts[newName] = columnSorts[oldName];
+    delete columnSorts[oldName];
+    store.set('sorts', columnSorts);
+  }
   let id = state.labelIds[oldName];
   if (!id) {
     const { labels = [] } = await api('/labels');
