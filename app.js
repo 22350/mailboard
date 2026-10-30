@@ -1991,6 +1991,8 @@ async function checkForUpdate() {
 }
 
 function watchForUpdates() {
+  // The service worker is what lets the browser offer "Install Mailboard".
+  navigator.serviceWorker?.register('sw.js').catch(() => {});
   if (!VERSION) return;
   setInterval(checkForUpdate, 5 * 60 * 1000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForUpdate(); });
