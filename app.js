@@ -455,6 +455,33 @@ function openColorPicker(anchor, id) {
   setTimeout(() => document.addEventListener('click', closeColorPicker, { once: true }));
 }
 
+async function spamThread(id) {
+  const t = state.threads.get(id);
+  if (!t) return;
+  const wasInbox = t.labels.has('INBOX');
+  const modify = (body) => api(`/threads/${id}/modify`, { method: 'POST', body });
+  try {
+    await modify({ addLabelIds: ['SPAM'], removeLabelIds: ['INBOX'] });
+    state.threads.delete(id);
+    assign(columns());
+    render();
+    if (state.openId === id) closeReader();
+    toast('Reported as spam', {
+      label: 'Undo',
+      run: async () => {
+        try {
+          await modify({ removeLabelIds: ['SPAM'], addLabelIds: wasInbox ? ['INBOX'] : [] });
+          state.threads.set(id, t);
+          assign(columns());
+          render();
+        } catch (e) { if (!(e instanceof AuthError)) toast(e.message); }
+      },
+    });
+  } catch (e) {
+    if (!(e instanceof AuthError)) toast('Could not report spam: ' + e.message);
+  }
+}
+
 async function trashThread(id) {
   const t = state.threads.get(id);
   try {
@@ -550,6 +577,7 @@ const ICONS = {
   unread: 'M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z',
   read: 'M21.99 8c0-.72-.37-1.35-.94-1.7L12 1 2.95 6.3C2.38 6.65 2 7.28 2 8v10c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2l-.01-10zM12 13L3.74 7.84 12 3l8.26 4.84L12 13z',
   replied: 'M18 7l-1.41-1.41-6.34 6.34 1.41 1.41L18 7zm4.24-1.41L11.66 16.17 7.48 12l-1.41 1.41L11.66 19l12-12-1.42-1.41zM.41 13.41L6 19l1.41-1.41L1.83 12 .41 13.41z',
+  spam: 'M15.73 3H8.27L3 8.27v7.46L8.27 21h7.46L21 15.73V8.27L15.73 3zM12 17.3c-.72 0-1.3-.58-1.3-1.3 0-.72.58-1.3 1.3-1.3.72 0 1.3.58 1.3 1.3 0 .72-.58 1.3-1.3 1.3zm1-4.3h-2V7h2v6z',
   palette: 'M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5s1.5.67 1.5 1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z',
   clip: 'M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z',
 };
@@ -688,6 +716,7 @@ function renderCard(t, colIdx) {
     el('div', { class: 'card-actions' }, [
       iconButton('Color', 'palette', (b) => openColorPicker(b, t.id)),
       iconButton('Archive', 'archive', () => archiveThread(t.id)),
+      iconButton('Report spam', 'spam', () => spamThread(t.id)),
       iconButton('Delete', 'trash', () => trashThread(t.id)),
       t.unread
         ? iconButton('Mark as read', 'read', () => toggleRead(t.id))
