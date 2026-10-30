@@ -1337,11 +1337,18 @@ function renderAddColumn() {
 }
 
 function renderSearchColumn() {
-  const { q, title, ids, more } = state.search;
+  const { q, title, more } = state.search;
   const close = el('button', { class: 'icon-btn', title: 'Close', 'aria-label': 'Close' }, '✕');
   close.addEventListener('click', clearSearch);
+  // Each folder/label remembers its own sort; all free-text searches share one.
+  const col = { name: 'folder:' + (title || '') };
+  const sort = sortOf(col);
+  const ids = state.search.ids.filter((id) => state.threads.has(id));
+  if (sort.key !== 'newest') ids.sort((a, b) => sort.cmp(state.threads.get(a), state.threads.get(b)));
+  const sortBtn = iconButton(`Sort: ${sort.label}`, 'sort', (b) => openSortMenu(b, col));
+  if (sort.key !== 'newest') sortBtn.classList.add('on');
   return el('section', { class: 'column search', 'data-col': '-1' }, [
-    el('h2', {}, [columnCheckbox(-1), el('span', { class: 'q' }, title || `“${q}”`), el('span', { class: 'count' }, ids.length + (more ? '+' : '')), close]),
+    el('h2', {}, [columnCheckbox(-1), el('span', { class: 'q' }, title || `“${q}”`), el('span', { class: 'count' }, ids.length + (more ? '+' : '')), sortBtn, close]),
     el('div', { class: 'cards' }, ids.length
       ? ids.map((id) => renderCard(state.threads.get(id), -1))
       : el('p', { class: 'hint' }, title ? 'Nothing here.' : 'No matches.')),
