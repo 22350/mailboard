@@ -53,6 +53,7 @@ const state = {
   threads: new Map(),  // thread id -> summary
   board: [],           // per column: sorted thread ids
   more: [],            // per column: Gmail has more than we fetched
+  search: null,        // { q, ids, more } while search results are shown
   openId: null,
   dragging: false,
   loading: false,
@@ -225,6 +226,51 @@ function assign(cols) {
   for (const list of state.board) list.sort((a, b) => state.threads.get(b).date - state.threads.get(a).date);
 }
 
+const metadataPath = (id) =>
+  `/threads/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Content-Type`;
+
+// Fetch summaries for listed threads whose cached copy is out of date.
+// Returns the ids that loaded; threads that vanish mid-load are skipped.
+async function fetchSummaries(listed) {
+  const ok = new Set(listed.map((t) => t.id));
+  const stale = listed.filter((t) => state.threads.get(t.id)?.historyId !== t.historyId);
+  if (stale.length > 10) setStatus(`Loading ${stale.length} conversations…`);
+  await mapLimit(stale, 5, async (item) => {
+    try {
+      state.threads.set(item.id, summarize(await api(metadataPath(item.id))));
+    } catch (e) {
+      if (e instanceof AuthError) throw e;
+      ok.delete(item.id);
+    }
+  });
+  return ok;
+}
+
+async function runSearch(q) {
+  q = q.trim();
+  if (!q) { clearSearch(); return; }
+  setStatus('Searching…');
+  try {
+    const r = await api('/threads?' + new URLSearchParams({ q, maxResults: '50' }));
+    const listed = r.threads || [];
+    const ok = await fetchSummaries(listed);
+    state.search = { q, ids: listed.map((t) => t.id).filter((id) => ok.has(id)), more: !!r.nextPageToken };
+    assign(columns());
+    render();
+    $('#board').scrollLeft = 0;
+    setStatus('');
+  } catch (e) {
+    if (!(e instanceof AuthError)) toast('Search failed: ' + e.message);
+    setStatus('');
+  }
+}
+
+function clearSearch() {
+  state.search = null;
+  $('#search').value = '';
+  render();
+}
+
 async function loadBoard() {
   if (state.loading || state.dragging || !state.token) return;
   state.loading = true;
@@ -240,19 +286,10 @@ async function loadBoard() {
       return api('/threads?' + p);
     }));
     state.more = lists.map((r) => !!r.nextPageToken);
-    const seen = new Map();
-    for (const t of lists.flatMap((r) => r.threads || [])) seen.set(t.id, t.historyId);
-    const stale = [...seen].filter(([id, h]) => state.threads.get(id)?.historyId !== h).map(([id]) => id);
-    if (stale.length > 10) setStatus(`Loading ${stale.length} conversations…`);
-    await mapLimit(stale, 5, async (id) => {
-      try {
-        const t = await api(`/threads/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Content-Type`);
-        state.threads.set(id, summarize(t));
-      } catch (e) {
-        if (e instanceof AuthError) throw e;
-        seen.delete(id); // deleted or moved while loading; skip it
-      }
-    });
+    const listed = new Map();
+    for (const t of lists.flatMap((r) => r.threads || [])) listed.set(t.id, t);
+    const seen = await fetchSummaries([...listed.values()]);
+    for (const id of state.search?.ids || []) seen.add(id);
     for (const id of [...state.threads.keys()]) if (!seen.has(id)) state.threads.delete(id);
     assign(cols);
     render();
@@ -576,7 +613,7 @@ function toast(msg, action) {
 
 function show(view) {
   for (const id of ['board', 'signin', 'setup']) $('#' + id).hidden = id !== view;
-  $('#btn-compose').hidden = $('#btn-refresh').hidden = view !== 'board';
+  $('#btn-compose').hidden = $('#btn-refresh').hidden = $('#search-form').hidden = view !== 'board';
 }
 
 function render() {
@@ -584,9 +621,24 @@ function render() {
   const board = $('#board');
   const focusedId = document.activeElement?.closest?.('.card')?.dataset.id;
   const scrolls = [...board.querySelectorAll('.cards')].map((c) => c.scrollTop);
-  board.replaceChildren(...cols.map((col, i) => renderColumn(col, i)));
+  board.replaceChildren(
+    ...(state.search ? [renderSearchColumn()] : []),
+    ...cols.map((col, i) => renderColumn(col, i)),
+  );
   board.querySelectorAll('.cards').forEach((c, i) => { c.scrollTop = scrolls[i] || 0; });
   if (focusedId) board.querySelector(`.card[data-id="${focusedId}"]`)?.focus({ preventScroll: true });
+}
+
+function renderSearchColumn() {
+  const { q, ids, more } = state.search;
+  const close = el('button', { class: 'icon-btn', title: 'Close search', 'aria-label': 'Close search' }, '✕');
+  close.addEventListener('click', clearSearch);
+  return el('section', { class: 'column search', 'data-col': '-1' }, [
+    el('h2', {}, [el('span', { class: 'q' }, `“${q}”`), el('span', { class: 'count' }, ids.length + (more ? '+' : '')), close]),
+    el('div', { class: 'cards' }, ids.length
+      ? ids.map((id) => renderCard(state.threads.get(id), -1))
+      : el('p', { class: 'hint' }, 'No matches.')),
+  ]);
 }
 
 function renderColumn(col, i) {
@@ -610,6 +662,12 @@ function renderColumn(col, i) {
 
 function renderCard(t, colIdx) {
   const color = colorOf(t);
+  let where = null;
+  if (colIdx < 0) { // search result: show which column it lives in
+    const cols = columns();
+    const c = columnOf(t, cols);
+    where = el('span', { class: 'where' }, c >= 0 ? cols[c].name : 'Archived');
+  }
   const card = el('article', {
     class: 'card' + (t.unread ? ' unread' : '') + (t.id === state.openId ? ' open' : '') + (color ? ' colored' : ''),
     style: color ? `--card-color:${color.bg}` : null,
@@ -618,6 +676,7 @@ function renderCard(t, colIdx) {
     el('div', { class: 'top' }, [
       el('span', { class: 'people' }, t.people),
       t.count > 1 ? el('span', { class: 'num' }, String(t.count)) : null,
+      where,
       el('time', {}, dateLabel(t.date)),
     ]),
     el('div', { class: 'body' }, [
@@ -942,6 +1001,10 @@ function wireUi() {
   $('#banner-btn').addEventListener('click', signIn);
   $('#btn-refresh').addEventListener('click', loadBoard);
   $('#btn-compose').addEventListener('click', openCompose);
+  $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); runSearch($('#search').value); });
+  $('#search').addEventListener('keydown', (e) => { if (e.key === 'Escape') clearSearch(); });
+  // The browser's built-in ✕ in the search box empties it without submitting.
+  $('#search').addEventListener('search', () => { if (!$('#search').value) clearSearch(); });
   $('#btn-settings').addEventListener('click', openSettings);
   $('#settings').addEventListener('close', () => { if ($('#settings').returnValue === 'save') saveSettings(); });
   $('#set-signout').addEventListener('click', () => { $('#settings').close(); signOut(); });
