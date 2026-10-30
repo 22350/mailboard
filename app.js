@@ -55,6 +55,9 @@ const state = {
   more: [],            // per column: Gmail has more than we fetched
   search: null,        // { q, title, ids, more } while a search or folder is shown
   searchSeq: 0,        // bumps per search so a slow, older one can't overwrite a newer one
+  searchArgs: null,    // { q, folder } that produced state.search, to re-run it
+  selected: new Set(), // checked thread ids
+  selectAll: null,     // { key, scope, total } when "all matching in a column" is selected
   folder: null,        // sidebar folder or label being shown, by name
   userLabels: [],      // the user's own Gmail labels, for the sidebar
   labelCounts: {},     // label id -> Gmail label (with unread/total counts)
@@ -273,6 +276,7 @@ async function runSearch(q, folder) {
     const listed = r.threads || [];
     const ok = await fetchSummaries(listed);
     if (seq !== state.searchSeq) return; // a newer search or folder click won
+    state.searchArgs = { q, folder };
     state.search = {
       q, title: folder?.name,
       ids: listed.map((t) => t.id).filter((id) => ok.has(id)),
@@ -291,10 +295,250 @@ async function runSearch(q, folder) {
 function clearSearch() {
   state.searchSeq++;
   state.search = null;
+  state.searchArgs = null;
   state.folder = null;
+  if (state.selectAll?.key < 0) state.selectAll = null;
   $('#search').value = '';
   render();
   renderSidebar();
+}
+
+// ---------- selection & bulk actions ----------
+// Column keys: board column index, or -1 for the search/folder column.
+
+function columnThreadIds(key) {
+  return key < 0 ? state.search?.ids || [] : state.board[key] || [];
+}
+
+function toggleSelect(id) {
+  state.selectAll = null;
+  if (state.selected.has(id)) state.selected.delete(id); else state.selected.add(id);
+  render();
+}
+
+function toggleColumnSelect(key) {
+  const ids = columnThreadIds(key);
+  const all = ids.length > 0 && ids.every((id) => state.selected.has(id));
+  state.selectAll = null;
+  for (const id of ids) if (all) state.selected.delete(id); else state.selected.add(id);
+  render();
+}
+
+function clearSelection() {
+  state.selected.clear();
+  state.selectAll = null;
+  render();
+}
+
+// The column whose cards are exactly the current selection, if any.
+function fullySelectedColumn() {
+  const keys = [...(state.search ? [-1] : []), ...state.board.map((_, i) => i)];
+  return keys.find((k) => {
+    const ids = columnThreadIds(k);
+    return ids.length && ids.length === state.selected.size && ids.every((id) => state.selected.has(id));
+  });
+}
+
+const searchLabel = (name) => name.toLowerCase().replace(/[\s/]+/g, '-');
+
+// What "everything in this column" means as a Gmail query.
+function columnScope(key) {
+  if (key < 0) {
+    const { q, folder } = state.searchArgs;
+    return { q: folder?.q || q || '', labelIds: folder?.label, spamTrash: folder?.spamTrash, name: state.search.title || `“${q}”` };
+  }
+  const cols = columns();
+  const col = cols[key];
+  if (col.inbox) {
+    const others = cols.slice(1).map((c) => `-label:${searchLabel(LABEL_PREFIX + c.name)}`).join(' ');
+    return { q: `in:inbox ${others}`.trim(), name: col.name };
+  }
+  return { labelIds: state.labelIds[col.name], name: col.name };
+}
+
+function scopeParams(s, max, pageToken) {
+  const p = new URLSearchParams({ maxResults: String(max) });
+  if (s.q) p.set('q', s.q);
+  if (s.labelIds) p.set('labelIds', s.labelIds);
+  if (s.spamTrash) p.set('includeSpamTrash', 'true');
+  if (pageToken) p.set('pageToken', pageToken);
+  return p;
+}
+
+async function scopeTotal(s) {
+  if (s.labelIds && !s.q) {
+    const l = await api(`/labels/${encodeURIComponent(s.labelIds)}`);
+    return { n: l.threadsTotal, exact: true };
+  }
+  const r = await api('/threads?' + scopeParams(s, 1));
+  return { n: r.resultSizeEstimate || 0, exact: false };
+}
+
+function selectAllMatching(key) {
+  const scope = columnScope(key);
+  state.selectAll = { key, scope, total: null };
+  renderBulk();
+  scopeTotal(scope).then((total) => {
+    if (state.selectAll?.scope === scope) { state.selectAll.total = total; renderBulk(); }
+  }).catch((e) => { if (!(e instanceof AuthError)) toast(e.message); });
+}
+
+async function listAllMessageIds(scope) {
+  const ids = [];
+  let pageToken;
+  do {
+    const r = await api('/messages?' + scopeParams(scope, 500, pageToken));
+    for (const m of r.messages || []) ids.push(m.id);
+    pageToken = r.nextPageToken;
+    setStatus(`Finding conversations… ${ids.length.toLocaleString()}`);
+  } while (pageToken && ids.length < 100000);
+  return ids;
+}
+
+async function batchModify(ids, add, remove) {
+  for (let i = 0; i < ids.length; i += 1000) {
+    setStatus(`Updating… ${Math.min(i + 1000, ids.length).toLocaleString()} of ${ids.length.toLocaleString()}`);
+    await api('/messages/batchModify', {
+      method: 'POST',
+      body: { ids: ids.slice(i, i + 1000), addLabelIds: add, removeLabelIds: remove },
+    });
+  }
+}
+
+async function bulkChange(action, arg) {
+  const cols = columns();
+  const boardLabels = cols.slice(1).map((c) => state.labelIds[c.name]);
+  const fromSpamTrash = state.selectAll?.scope.spamTrash || state.searchArgs?.folder?.spamTrash;
+  if (action === 'archive') {
+    const doneIdx = cols.findIndex((c) => c.archive);
+    if (doneIdx >= 0) return bulkChange('move', doneIdx);
+    return { add: [], remove: ['INBOX', ...boardLabels], verb: 'Archived' };
+  }
+  if (action === 'move') {
+    const target = cols[arg];
+    const tl = state.labelIds[target.name];
+    return {
+      add: [...(target.inbox ? [] : [tl]), ...(target.archive ? [] : ['INBOX'])],
+      remove: [...boardLabels.filter((l) => l !== tl), ...(target.archive ? ['INBOX'] : []),
+        ...(fromSpamTrash ? ['SPAM', 'TRASH'] : [])],
+      verb: `Moved to ${target.name}`,
+    };
+  }
+  if (action === 'color') {
+    const add = arg ? [await colorLabelId(arg)] : [];
+    return { add, remove: Object.values(state.colorIds).filter((l) => !add.includes(l)), verb: arg ? `Colored ${arg.name}` : 'Color removed' };
+  }
+  return {
+    spam: { add: ['SPAM'], remove: ['INBOX'], verb: 'Reported as spam' },
+    trash: { add: ['TRASH'], remove: [], verb: 'Moved to Trash' },
+    read: { add: [], remove: ['UNREAD'], verb: 'Marked read' },
+    unread: { add: ['UNREAD'], remove: [], verb: 'Marked unread' },
+  }[action];
+}
+
+async function refreshAfterBulk() {
+  if (state.searchArgs) await runSearch(state.searchArgs.q, state.searchArgs.folder);
+  await loadBoard();
+}
+
+async function runBulk(action, arg) {
+  const all = state.selectAll;
+  try {
+    const change = await bulkChange(action, arg);
+    let count;
+    let undo;
+    if (all) {
+      const t = all.total;
+      const howMany = t ? `${t.exact ? '' : 'about '}${t.n.toLocaleString()}` : 'all';
+      if (!confirm(`${change.verb}: ${howMany} conversations in ${all.scope.name}. Continue?`)) return;
+      const ids = await listAllMessageIds(all.scope);
+      await batchModify(ids, change.add, change.remove);
+      count = t ? t.n : ids.length;
+      undo = () => batchModify(ids, change.remove, change.add);
+    } else {
+      const ids = [...state.selected];
+      const modify = (add, remove) => mapLimit(ids, 5, (id) =>
+        api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: add, removeLabelIds: remove } }));
+      setStatus('Updating…');
+      await modify(change.add, change.remove);
+      count = ids.length;
+      undo = () => modify(change.remove, change.add);
+    }
+    clearSelection();
+    setStatus('');
+    await refreshAfterBulk();
+    toast(`${change.verb}: ${count.toLocaleString()} conversation${count === 1 ? '' : 's'}`, {
+      label: 'Undo',
+      run: async () => {
+        try { await undo(); setStatus(''); await refreshAfterBulk(); }
+        catch (e) { if (!(e instanceof AuthError)) toast('Undo failed: ' + e.message); }
+      },
+    });
+  } catch (e) {
+    setStatus('');
+    if (!(e instanceof AuthError)) toast('Could not update: ' + e.message);
+  }
+}
+
+function linkButton(text, run) {
+  const b = el('button', { class: 'link-btn' }, text);
+  b.addEventListener('click', run);
+  return b;
+}
+
+function renderBulk() {
+  const bar = $('#bulk');
+  const n = state.selected.size;
+  $('#board').classList.toggle('selecting', n > 0);
+  if (!n) { bar.hidden = true; return; }
+  const cols = columns();
+  const all = state.selectAll;
+  const info = el('span', { class: 'bulk-info' });
+  if (all) {
+    const t = all.total;
+    info.append(t
+      ? `All ${t.exact ? '' : 'about '}${t.n.toLocaleString()} conversations in ${all.scope.name} are selected. `
+      : `Counting conversations in ${all.scope.name}… `,
+    linkButton('Select only these', () => { state.selectAll = null; renderBulk(); }));
+  } else {
+    info.append(`${n} selected`);
+    const full = fullySelectedColumn();
+    if (full !== undefined && (full < 0 ? state.search?.more : state.more[full])) {
+      info.append(' · ', linkButton(`Select all conversations in ${columnScope(full).name}`, () => selectAllMatching(full)));
+    }
+  }
+  const move = el('select', { 'aria-label': 'Move to column' }, [
+    el('option', { value: '' }, 'Move to…'),
+    ...cols.map((c, i) => el('option', { value: String(i) }, c.name)),
+  ]);
+  move.addEventListener('change', () => { if (move.value !== '') runBulk('move', Number(move.value)); });
+  const color = el('button', {}, [icon('palette'), ' Color']);
+  color.classList.add('color-btn');
+  color.addEventListener('click', (e) => { e.stopPropagation(); openColorPicker(color, null, (c) => runBulk('color', c)); });
+  const act = (label, action) => { const b = el('button', {}, label); b.addEventListener('click', () => runBulk(action)); return b; };
+  const close = el('button', { class: 'icon-btn', title: 'Clear selection', 'aria-label': 'Clear selection' }, '✕');
+  close.addEventListener('click', clearSelection);
+  bar.replaceChildren(info, el('div', { class: 'bulk-actions' }, [
+    move, color, act('Archive', 'archive'), act('Spam', 'spam'), act('Delete', 'trash'),
+    act('Mark read', 'read'), act('Mark unread', 'unread'), close,
+  ]));
+  bar.hidden = false;
+}
+
+function checkbox(label, checked, onChange) {
+  const box = el('input', { type: 'checkbox', class: 'pick', 'aria-label': label, title: label, draggable: 'false' });
+  box.checked = checked;
+  box.addEventListener('click', (e) => e.stopPropagation());
+  box.addEventListener('change', onChange);
+  return box;
+}
+
+function columnCheckbox(key) {
+  const ids = columnThreadIds(key);
+  const picked = ids.filter((id) => state.selected.has(id)).length;
+  const box = checkbox('Select all in this column', ids.length > 0 && picked === ids.length, () => toggleColumnSelect(key));
+  box.indeterminate = picked > 0 && picked < ids.length;
+  return box;
 }
 
 // ---------- sidebar ----------
@@ -522,7 +766,7 @@ async function setColor(id, color) {
 
 function closeColorPicker() { $('#color-pop')?.remove(); }
 
-function openColorPicker(anchor, id) {
+function openColorPicker(anchor, id, onPick = (color) => setColor(id, color)) {
   closeColorPicker();
   const t = state.threads.get(id);
   const current = t && colorOf(t);
@@ -531,7 +775,7 @@ function openColorPicker(anchor, id) {
       class: 'swatch' + (extra || '') + (color && color === current ? ' current' : ''),
       title: label, 'aria-label': label, style: color ? `--swatch:${color.bg}` : null,
     }, color ? null : '✕');
-    b.addEventListener('click', (e) => { e.stopPropagation(); closeColorPicker(); setColor(id, color); });
+    b.addEventListener('click', (e) => { e.stopPropagation(); closeColorPicker(); onPick(color); });
     return b;
   };
   const pop = el('div', { class: 'color-pop', id: 'color-pop' }, [
@@ -761,6 +1005,7 @@ function render() {
   );
   board.querySelectorAll('.cards').forEach((c, i) => { c.scrollTop = scrolls[i] || 0; });
   if (focusedId) board.querySelector(`.card[data-id="${focusedId}"]`)?.focus({ preventScroll: true });
+  renderBulk();
 }
 
 function saveColumnList(list) {
@@ -820,7 +1065,7 @@ function renderSearchColumn() {
   const close = el('button', { class: 'icon-btn', title: 'Close', 'aria-label': 'Close' }, '✕');
   close.addEventListener('click', clearSearch);
   return el('section', { class: 'column search', 'data-col': '-1' }, [
-    el('h2', {}, [el('span', { class: 'q' }, title || `“${q}”`), el('span', { class: 'count' }, ids.length + (more ? '+' : '')), close]),
+    el('h2', {}, [columnCheckbox(-1), el('span', { class: 'q' }, title || `“${q}”`), el('span', { class: 'count' }, ids.length + (more ? '+' : '')), close]),
     el('div', { class: 'cards' }, ids.length
       ? ids.map((id) => renderCard(state.threads.get(id), -1))
       : el('p', { class: 'hint' }, title ? 'Nothing here.' : 'No matches.')),
@@ -830,7 +1075,7 @@ function renderSearchColumn() {
 function renderColumn(col, i) {
   const ids = state.board[i] || [];
   const node = el('section', { class: 'column', 'data-col': i }, [
-    el('h2', {}, [col.name, el('span', { class: 'count' }, ids.length + (state.more[i] ? '+' : '')),
+    el('h2', {}, [columnCheckbox(i), col.name, el('span', { class: 'count' }, ids.length + (state.more[i] ? '+' : '')),
       i > 0 ? iconButton(`Remove column “${col.name}”`, null, () => removeColumn(i), '✕') : null]),
     el('div', { class: 'cards' }, ids.map((id) => renderCard(state.threads.get(id), i))),
   ]);
@@ -841,7 +1086,10 @@ function renderColumn(col, i) {
     node.classList.remove('drop');
     state.dragging = false;
     const id = e.dataTransfer.getData('text/plain');
-    if (id) moveWithUndo(id, i);
+    if (!id) return;
+    // Dragging one of several checked cards moves them all.
+    if (state.selected.has(id) && state.selected.size > 1 && !state.selectAll) runBulk('move', i);
+    else moveWithUndo(id, i);
   });
   return node;
 }
@@ -857,11 +1105,13 @@ function renderCard(t, colIdx) {
     where = el('span', { class: 'where' }, place);
   }
   const card = el('article', {
-    class: 'card' + (t.unread ? ' unread' : '') + (t.id === state.openId ? ' open' : '') + (color ? ' colored' : ''),
+    class: 'card' + (t.unread ? ' unread' : '') + (t.id === state.openId ? ' open' : '') + (color ? ' colored' : '')
+      + (state.selected.has(t.id) ? ' selected' : ''),
     style: color ? `--card-color:${color.bg}` : null,
     tabindex: '0', draggable: 'true', 'data-id': t.id, 'data-col': colIdx,
   }, [
     el('div', { class: 'top' }, [
+      checkbox('Select', state.selected.has(t.id), () => toggleSelect(t.id)),
       el('span', { class: 'people' }, t.people),
       t.count > 1 ? el('span', { class: 'num' }, String(t.count)) : null,
       where,
@@ -1224,6 +1474,7 @@ function onKey(e) {
   if (e.target.closest?.('input, textarea, dialog')) return;
   if (e.key === 'Escape' && $('#color-pop')) { closeColorPicker(); return; }
   if (e.key === 'Escape' && !$('#reader').hidden) { closeReader(); return; }
+  if (e.key === 'Escape' && state.selected.size) { clearSelection(); return; }
   const card = document.activeElement?.closest?.('.card');
   if (!card || e.ctrlKey || e.metaKey || e.altKey) return;
   const id = card.dataset.id;
@@ -1238,6 +1489,8 @@ function onKey(e) {
     archiveThread(id);
   } else if (e.key === 'u') {
     toggleRead(id);
+  } else if (e.key === 'x') {
+    toggleSelect(id);
   } else if (e.key === 'c') {
     e.preventDefault();
     openColorPicker(card, id);
