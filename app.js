@@ -888,6 +888,7 @@ async function toggleRead(id) {
   t.unread = unread;
   if (unread) t.labels.add('UNREAD'); else t.labels.delete('UNREAD');
   render();
+  refreshReaderActions(id);
   try {
     await api(`/threads/${id}/modify`, {
       method: 'POST',
@@ -897,6 +898,7 @@ async function toggleRead(id) {
     t.unread = !unread;
     if (unread) t.labels.delete('UNREAD'); else t.labels.add('UNREAD');
     render();
+    refreshReaderActions(id);
     if (!(e instanceof AuthError)) toast('Could not update: ' + e.message);
   }
 }
@@ -1474,8 +1476,12 @@ function renderActions(box, id) {
   const cols = columns();
   const t = state.threads.get(id);
   const current = t ? columnOf(t, cols) : -1;
-  const del = el('button', {}, 'Delete');
-  del.addEventListener('click', () => trashThread(id));
+  const action = (name, label, run) => {
+    const b = el('button', { class: 'with-icon' }, [icon(name), label]);
+    b.addEventListener('click', run);
+    return b;
+  };
+  const del = action('trash', 'Delete', () => trashThread(id));
   const color = t && colorOf(t);
   const colorBtn = el('button', { class: 'color-btn', style: color ? `--swatch:${color.bg}` : null },
     [icon('palette'), color ? color.name : 'Color']);
@@ -1493,6 +1499,10 @@ function renderActions(box, id) {
       return b;
     }),
     colorBtn,
+    action('archive', 'Archive', () => archiveThread(id)),
+    action('spam', 'Spam', () => spamThread(id)),
+    t?.unread ? action('read', 'Mark read', () => toggleRead(id))
+      : action('unread', 'Mark unread', () => toggleRead(id)),
     del,
     gmail,
   );

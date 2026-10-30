@@ -199,7 +199,8 @@ a { color: var(--accent); }
 .swatch:hover:not(:disabled) { border-color: var(--text); }
 .swatch.current { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--text); }
 .swatch.none { background: var(--col); color: var(--muted); }
-.color-btn { display: inline-flex; align-items: center; gap: .35rem; }
+.color-btn, .with-icon { display: inline-flex; align-items: center; gap: .35rem; }
+.with-icon svg { width: 18px; height: 18px; fill: currentColor; }
 .color-btn svg { width: 18px; height: 18px; fill: var(--swatch, currentColor); }
 .card-actions {
   position: absolute; top: .35rem; right: .35rem; display: none; gap: .15rem;
