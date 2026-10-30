@@ -62,6 +62,8 @@ const state = {
   userLabels: [],      // the user's own Gmail labels, for the sidebar
   labelCounts: {},     // label id -> Gmail label (with unread/total counts)
   sidebarOpen: store.get('sidebar', window.innerWidth > 800),
+  navMore: store.get('navMore', false),       // hidden folders expanded
+  labelsMore: store.get('labelsMore', false), // hidden labels expanded
   addingColumn: false, // the "new column" name box is open; don't re-render under it
   openId: null,
   dragging: false,
@@ -569,10 +571,26 @@ async function loadCounts() {
   renderSidebar();
 }
 
-function navItem(name, iconName, n, active, onClick) {
-  const b = el('button', { class: 'nav-item' + (active ? ' active' : '') + (n ? ' has-count' : '') }, [
+// Gmail doesn't let apps hide its system folders, so that choice is kept per browser.
+const hiddenFolders = new Set(store.get('hiddenFolders', []));
+
+function navItem(name, iconName, n, active, onClick, onMenu, iconColor) {
+  const main = el('button', { class: 'nav-main' }, [
     icon(iconName), el('span', { class: 'nav-name' }, name), n ? el('span', { class: 'n' }, n.toLocaleString()) : null,
   ]);
+  if (iconColor) main.firstChild.style.fill = iconColor;
+  main.addEventListener('click', onClick);
+  const row = el('div', { class: 'nav-item' + (active ? ' active' : '') + (n ? ' has-count' : '') }, [main]);
+  if (onMenu) {
+    const more = el('button', { class: 'nav-menu', title: 'Options', 'aria-label': `Options for ${name}` }, '⋮');
+    more.addEventListener('click', (e) => { e.stopPropagation(); onMenu(more); });
+    row.append(more);
+  }
+  return row;
+}
+
+function navToggle(open, onClick) {
+  const b = el('button', { class: 'nav-toggle' }, [el('span', { class: 'chev' }, open ? '⌃' : '⌄'), open ? 'Less' : 'More']);
   b.addEventListener('click', onClick);
   return b;
 }
@@ -581,20 +599,180 @@ function renderSidebar() {
   const nav = $('#sidebar');
   if (!nav) return;
   const counts = state.labelCounts;
-  const items = FOLDERS.map((f) => {
+
+  const folderRow = (f) => {
     const c = f.label && counts[f.label];
     const n = !c ? 0 : f.count === 'total' ? c.messagesTotal : f.count === 'unread' ? c.threadsUnread : 0;
     const active = f.board ? !state.search : state.folder === f.name;
-    return navItem(f.name, f.icon, n, active, () => (f.board ? clearSearch() : runSearch('', f)));
-  });
-  const labels = state.userLabels.map((l) =>
-    navItem(l.name, 'label', counts[l.id]?.threadsUnread || 0, state.folder === l.name,
-      () => runSearch('', { name: l.name, label: l.id })));
+    return navItem(f.name, f.icon, n, active, () => (f.board ? clearSearch() : runSearch('', f)),
+      f.board ? null : (anchor) => openFolderMenu(anchor, f));
+  };
+  const shownFolders = FOLDERS.filter((f) => f.board || !hiddenFolders.has(f.name));
+  const moreFolders = FOLDERS.filter((f) => !f.board && hiddenFolders.has(f.name));
+
+  const unreadOf = (l) => counts[l.id]?.threadsUnread || 0;
+  const labelShown = (l) => l.labelListVisibility === 'labelShowIfUnread' ? unreadOf(l) > 0 : l.labelListVisibility !== 'labelHide';
+  const labelRow = (l) => navItem(l.name, 'label', unreadOf(l), state.folder === l.name,
+    () => runSearch('', { name: l.name, label: l.id }), (anchor) => openLabelMenu(anchor, l), l.color?.backgroundColor);
+  const shownLabels = state.userLabels.filter(labelShown);
+  const moreLabels = state.userLabels.filter((l) => !labelShown(l));
+
+  const add = el('button', { class: 'icon-btn', title: 'Create new label', 'aria-label': 'Create new label' }, '+');
+  add.addEventListener('click', () => createLabel(''));
+
   nav.replaceChildren(
-    ...items,
-    labels.length ? el('div', { class: 'nav-head' }, 'Labels') : null,
-    ...labels,
+    ...shownFolders.map(folderRow),
+    ...(state.navMore ? moreFolders.map(folderRow) : []),
+    moreFolders.length ? navToggle(state.navMore, () => { state.navMore = !state.navMore; store.set('navMore', state.navMore); renderSidebar(); }) : null,
+    el('div', { class: 'nav-head' }, [el('span', {}, 'Labels'), add]),
+    ...shownLabels.map(labelRow),
+    ...(state.labelsMore ? moreLabels.map(labelRow) : []),
+    moreLabels.length ? navToggle(state.labelsMore, () => { state.labelsMore = !state.labelsMore; store.set('labelsMore', state.labelsMore); renderSidebar(); }) : null,
   );
+}
+
+// ----- sidebar menus -----
+
+function placePopup(pop, anchor) {
+  const r = anchor.getBoundingClientRect();
+  pop.style.top = Math.max(8, Math.min(r.bottom + 4, innerHeight - pop.offsetHeight - 8)) + 'px';
+  pop.style.left = Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8)) + 'px';
+}
+
+function closeMenu() { $('#menu')?.remove(); }
+
+// items: { heading } | { sep: true } | { swatches: true, current, run(color|null) } | { label, checked, run }
+function openMenu(anchor, items) {
+  closeMenu();
+  closeColorPicker();
+  const menu = el('div', { class: 'menu', id: 'menu', role: 'menu' });
+  const pick = (run) => (e) => { e.stopPropagation(); closeMenu(); run(); };
+  for (const it of items) {
+    if (it.sep) menu.append(el('hr'));
+    else if (it.heading) menu.append(el('div', { class: 'menu-head' }, it.heading));
+    else if (it.swatches) {
+      const row = el('div', { class: 'menu-swatches' });
+      for (const c of [...COLORS, null]) {
+        const b = el('button', {
+          class: 'swatch' + (c ? '' : ' none') + (c && c.bg === it.current ? ' current' : ''),
+          title: c ? c.name : 'No color', 'aria-label': c ? c.name : 'No color', style: c ? `--swatch:${c.bg}` : null,
+        }, c ? null : '✕');
+        b.addEventListener('click', pick(() => it.run(c)));
+        row.append(b);
+      }
+      menu.append(row);
+    } else {
+      const b = el('button', { class: 'menu-item', role: 'menuitem' }, [el('span', { class: 'tick' }, it.checked ? '✓' : ''), it.label]);
+      b.addEventListener('click', pick(it.run));
+      menu.append(b);
+    }
+  }
+  document.body.append(menu);
+  placePopup(menu, anchor);
+  menu.querySelector('button')?.focus();
+  setTimeout(() => document.addEventListener('click', closeMenu, { once: true }));
+}
+
+function openFolderMenu(anchor, f) {
+  const set = (hide) => {
+    if (hide) hiddenFolders.add(f.name); else hiddenFolders.delete(f.name);
+    store.set('hiddenFolders', [...hiddenFolders]);
+    renderSidebar();
+  };
+  const hidden = hiddenFolders.has(f.name);
+  openMenu(anchor, [
+    { heading: 'In label list' },
+    { label: 'Show', checked: !hidden, run: () => set(false) },
+    { label: 'Hide', checked: hidden, run: () => set(true) },
+  ]);
+}
+
+function openLabelMenu(anchor, l) {
+  const list = l.labelListVisibility || 'labelShow';
+  const msgs = l.messageListVisibility || 'show';
+  openMenu(anchor, [
+    { heading: 'Label color' },
+    { swatches: true, current: l.color?.backgroundColor, run: (c) => setLabelColor(l, c) },
+    { sep: true },
+    { heading: 'In label list' },
+    { label: 'Show', checked: list === 'labelShow', run: () => patchLabel(l, { labelListVisibility: 'labelShow' }) },
+    { label: 'Show if unread', checked: list === 'labelShowIfUnread', run: () => patchLabel(l, { labelListVisibility: 'labelShowIfUnread' }) },
+    { label: 'Hide', checked: list === 'labelHide', run: () => patchLabel(l, { labelListVisibility: 'labelHide' }) },
+    { sep: true },
+    { heading: 'In message list' },
+    { label: 'Show', checked: msgs === 'show', run: () => patchLabel(l, { messageListVisibility: 'show' }) },
+    { label: 'Hide', checked: msgs === 'hide', run: () => patchLabel(l, { messageListVisibility: 'hide' }) },
+    { sep: true },
+    { label: 'Edit', run: () => renameUserLabel(l) },
+    { label: 'Remove label', run: () => removeUserLabel(l) },
+    { label: 'Add sublabel', run: () => createLabel(l.name + '/') },
+  ]);
+}
+
+function storeUserLabel(updated) {
+  const i = state.userLabels.findIndex((x) => x.id === updated.id);
+  if (i >= 0) state.userLabels[i] = { ...state.userLabels[i], ...updated };
+  else state.userLabels.push(updated);
+  state.userLabels.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  renderSidebar();
+}
+
+async function patchLabel(l, body) {
+  try {
+    storeUserLabel(await api(`/labels/${l.id}`, { method: 'PATCH', body }));
+  } catch (e) {
+    if (!(e instanceof AuthError)) toast('Could not change label: ' + e.message);
+  }
+}
+
+async function setLabelColor(l, c) {
+  if (c) {
+    const textColor = ['Orange', 'Yellow', 'Pink'].includes(c.name) ? '#000000' : '#ffffff';
+    return patchLabel(l, { color: { backgroundColor: c.bg, textColor } });
+  }
+  // A full update without a color clears it.
+  try {
+    const { id, name, labelListVisibility, messageListVisibility } = l;
+    const updated = await api(`/labels/${id}`, { method: 'PUT', body: { id, name, labelListVisibility, messageListVisibility } });
+    state.userLabels = state.userLabels.filter((x) => x.id !== id);
+    storeUserLabel(updated);
+  } catch (e) {
+    if (!(e instanceof AuthError)) toast('Could not change label: ' + e.message);
+  }
+}
+
+async function renameUserLabel(l) {
+  const name = prompt('Rename label', l.name)?.trim();
+  if (!name || name === l.name) return;
+  const wasShowing = state.folder === l.name;
+  await patchLabel(l, { name });
+  if (wasShowing) state.folder = name;
+}
+
+async function removeUserLabel(l) {
+  if (!confirm(`Remove the label “${l.name}”?\n\nThe emails stay in Gmail; they just lose this label.`)) return;
+  try {
+    await api(`/labels/${l.id}`, { method: 'DELETE' });
+    state.userLabels = state.userLabels.filter((x) => x.id !== l.id);
+    if (state.folder === l.name) clearSearch();
+    renderSidebar();
+    toast(`Removed label “${l.name}”`);
+  } catch (e) {
+    if (!(e instanceof AuthError)) toast('Could not remove label: ' + e.message);
+  }
+}
+
+async function createLabel(prefix) {
+  const name = prompt(prefix ? `New sublabel under “${prefix.slice(0, -1)}”` : 'New label name')?.trim().replace(/^\/+|\/+$/g, '');
+  if (!name) return;
+  try {
+    storeUserLabel(await api('/labels', {
+      method: 'POST',
+      body: { name: prefix + name, labelListVisibility: 'labelShow', messageListVisibility: 'show' },
+    }));
+  } catch (e) {
+    if (!(e instanceof AuthError)) toast('Could not create label: ' + e.message);
+  }
 }
 
 function setSidebar(open) {
@@ -1473,6 +1651,7 @@ async function applySettings({ inboxName, cols, lastArchives, clientId }) {
 function onKey(e) {
   if (e.target.closest?.('input, textarea, dialog')) return;
   if (e.key === 'Escape' && $('#color-pop')) { closeColorPicker(); return; }
+  if (e.key === 'Escape' && $('#menu')) { closeMenu(); return; }
   if (e.key === 'Escape' && !$('#reader').hidden) { closeReader(); return; }
   if (e.key === 'Escape' && state.selected.size) { clearSelection(); return; }
   const card = document.activeElement?.closest?.('.card');
