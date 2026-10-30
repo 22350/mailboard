@@ -426,6 +426,7 @@ async function bulkChange(action, arg) {
       verb: `Moved to ${target.name}`,
     };
   }
+  if (action === 'labels') return arg;
   if (action === 'color') {
     const add = arg ? [await colorLabelId(arg)] : [];
     return { add, remove: Object.values(state.colorIds).filter((l) => !add.includes(l)), verb: arg ? `Colored ${arg.name}` : 'Color removed' };
@@ -574,7 +575,7 @@ async function loadCounts() {
 // Gmail doesn't let apps hide its system folders, so that choice is kept per browser.
 const hiddenFolders = new Set(store.get('hiddenFolders', []));
 
-function navItem(name, iconName, n, active, onClick, onMenu, iconColor) {
+function navItem(name, iconName, n, active, onClick, onMenu, iconColor, onDrop) {
   const main = el('button', { class: 'nav-main' }, [
     icon(iconName), el('span', { class: 'nav-name' }, name), n ? el('span', { class: 'n' }, n.toLocaleString()) : null,
   ]);
@@ -586,7 +587,70 @@ function navItem(name, iconName, n, active, onClick, onMenu, iconColor) {
     more.addEventListener('click', (e) => { e.stopPropagation(); onMenu(more); });
     row.append(more);
   }
+  if (onDrop) {
+    row.addEventListener('dragover', (e) => {
+      if (e.dataTransfer.types.includes(COLUMN_DRAG)) return;
+      e.preventDefault();
+      row.classList.add('drop');
+    });
+    row.addEventListener('dragleave', (e) => { if (!row.contains(e.relatedTarget)) row.classList.remove('drop'); });
+    row.addEventListener('drop', (e) => {
+      e.preventDefault();
+      row.classList.remove('drop');
+      state.dragging = false;
+      const id = e.dataTransfer.getData('text/plain');
+      if (id) onDrop(id);
+    });
+  }
   return row;
+}
+
+// Add/remove labels on one thread, with undo.
+async function labelThread(id, add, remove, verb) {
+  const t = state.threads.get(id);
+  if (!t) return;
+  const apply = async (a, r) => {
+    a.forEach((l) => t.labels.add(l));
+    r.forEach((l) => t.labels.delete(l));
+    assign(columns());
+    render();
+    refreshReaderActions(id);
+    await api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: a, removeLabelIds: r } });
+  };
+  try {
+    await apply(add, remove);
+    toast(verb, { label: 'Undo', run: () => apply(remove, add).catch((e) => toast(e.message)) });
+  } catch (e) {
+    if (!(e instanceof AuthError)) toast('Could not update: ' + e.message);
+  }
+}
+
+// Dropping a card on a sidebar folder or label, Gmail-style. Returns null
+// for folders that can't take a drop (Sent, Drafts, Snoozed, …).
+function navDropHandler(target) {
+  const many = (id) => state.selected.has(id) && state.selected.size > 1 && !state.selectAll;
+  const pick = (one, bulk) => (id) => (many(id) ? runBulk(...bulk) : one(id));
+  const addLabel = (labelId, verb, move) => {
+    const offBoard = () => ['INBOX', ...columns().slice(1).map((c) => state.labelIds[c.name])];
+    return pick(
+      (id) => {
+        const t = state.threads.get(id);
+        const remove = move && t ? offBoard().filter((l) => t.labels.has(l)) : [];
+        return labelThread(id, [labelId], remove, verb);
+      },
+      ['labels', { add: [labelId], remove: move ? offBoard() : [], verb }],
+    );
+  };
+  if (target.userLabel) return addLabel(target.userLabel.id, `Moved to ${target.userLabel.name}`, true);
+  switch (target.name) {
+    case 'Inbox': return pick((id) => moveWithUndo(id, 0), ['move', 0]);
+    case 'All Mail': return pick(archiveThread, ['archive']);
+    case 'Spam': return pick(spamThread, ['spam']);
+    case 'Trash': return pick(trashThread, ['trash']);
+    case 'Starred': return addLabel('STARRED', 'Starred', false);
+    case 'Important': return addLabel('IMPORTANT', 'Marked important', false);
+    default: return null;
+  }
 }
 
 function navToggle(open, onClick) {
@@ -605,7 +669,7 @@ function renderSidebar() {
     const n = !c ? 0 : f.count === 'total' ? c.messagesTotal : f.count === 'unread' ? c.threadsUnread : 0;
     const active = f.board ? !state.search : state.folder === f.name;
     return navItem(f.name, f.icon, n, active, () => (f.board ? clearSearch() : runSearch('', f)),
-      f.board ? null : (anchor) => openFolderMenu(anchor, f));
+      f.board ? null : (anchor) => openFolderMenu(anchor, f), null, navDropHandler(f));
   };
   const shownFolders = FOLDERS.filter((f) => f.board || !hiddenFolders.has(f.name));
   const moreFolders = FOLDERS.filter((f) => !f.board && hiddenFolders.has(f.name));
@@ -613,7 +677,8 @@ function renderSidebar() {
   const unreadOf = (l) => counts[l.id]?.threadsUnread || 0;
   const labelShown = (l) => l.labelListVisibility === 'labelShowIfUnread' ? unreadOf(l) > 0 : l.labelListVisibility !== 'labelHide';
   const labelRow = (l) => navItem(l.name, 'label', unreadOf(l), state.folder === l.name,
-    () => runSearch('', { name: l.name, label: l.id }), (anchor) => openLabelMenu(anchor, l), l.color?.backgroundColor);
+    () => runSearch('', { name: l.name, label: l.id }), (anchor) => openLabelMenu(anchor, l), l.color?.backgroundColor,
+    navDropHandler({ userLabel: l }));
   const shownLabels = state.userLabels.filter(labelShown);
   const moreLabels = state.userLabels.filter((l) => !labelShown(l));
 
@@ -1476,12 +1541,6 @@ function renderActions(box, id) {
   const cols = columns();
   const t = state.threads.get(id);
   const current = t ? columnOf(t, cols) : -1;
-  const action = (name, label, run) => {
-    const b = el('button', { class: 'with-icon' }, [icon(name), label]);
-    b.addEventListener('click', run);
-    return b;
-  };
-  const del = action('trash', 'Delete', () => trashThread(id));
   const color = t && colorOf(t);
   const colorBtn = el('button', { class: 'color-btn', style: color ? `--swatch:${color.bg}` : null },
     [icon('palette'), color ? color.name : 'Color']);
@@ -1499,11 +1558,12 @@ function renderActions(box, id) {
       return b;
     }),
     colorBtn,
-    action('archive', 'Archive', () => archiveThread(id)),
-    action('spam', 'Spam', () => spamThread(id)),
-    t?.unread ? action('read', 'Mark read', () => toggleRead(id))
-      : action('unread', 'Mark unread', () => toggleRead(id)),
-    del,
+    iconButton('Archive', 'archive', () => archiveThread(id)),
+    iconButton('Report spam', 'spam', () => spamThread(id)),
+    iconButton('Delete', 'trash', () => trashThread(id)),
+    t?.unread
+      ? iconButton('Mark as read', 'read', () => toggleRead(id))
+      : iconButton('Mark as unread', 'unread', () => toggleRead(id)),
     gmail,
   );
 }
