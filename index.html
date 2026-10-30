@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; connect-src 'self' https://gmail.googleapis.com https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src * data: blob:; font-src * data:; media-src *">
 <title>Mailboard</title>
-<link rel="stylesheet" href="style.css?v=20261029185141">
+<link rel="stylesheet" href="style.css?v=20261029185718">
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="app.js?v=20261029185141" defer></script>
+<script src="app.js?v=20261029185718" defer></script>
 </head>
 <body>
 <header class="bar">
@@ -46,14 +46,17 @@
 <dialog id="settings">
   <form method="dialog">
     <h2>Settings</h2>
-    <label>Columns, one per line. The first is your inbox.
-      <textarea id="set-columns" rows="5"></textarea>
-    </label>
+    <div class="field">
+      <span>Columns</span>
+      <div id="set-columns" class="col-list"></div>
+      <button type="button" id="set-add" class="add-col">+ Add column</button>
+    </div>
     <label class="check"><input type="checkbox" id="set-archive"> Last column archives mail (takes it out of Gmail's Inbox)</label>
     <label>Google OAuth Client ID
       <input id="set-client" autocomplete="off">
     </label>
-    <p class="hint">Each column is a Gmail label under "Board/". Renaming a column creates a new label; the old one stays in Gmail.</p>
+    <p class="hint">Each column is a Gmail label under "Board/". Renaming a column renames the label, so its emails come along. Removing a column leaves its label in Gmail.</p>
+    <p id="set-error" class="error" role="alert"></p>
     <div class="row">
       <button id="set-signout" type="button">Sign out</button>
       <div class="spacer"></div>

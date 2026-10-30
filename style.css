@@ -152,6 +152,14 @@ dialog { border: 1px solid var(--border); border-radius: 12px; background: var(-
 dialog form { display: flex; flex-direction: column; gap: .9rem; }
 dialog label { display: flex; flex-direction: column; gap: .3rem; }
 dialog label.check { flex-direction: row; }
+dialog .field { display: flex; flex-direction: column; gap: .4rem; }
+.col-list { display: flex; flex-direction: column; gap: .4rem; }
+.col-row { display: flex; gap: .25rem; align-items: center; }
+.col-row input { flex: 1; min-width: 0; }
+.col-row.inbox .hint { white-space: nowrap; padding: 0 .4rem; }
+.add-col { align-self: flex-start; }
+.error { color: #d33; margin: 0; }
+.error:empty { display: none; }
 dialog h2 { margin: 0; }
 
 @media (max-width: 640px) {

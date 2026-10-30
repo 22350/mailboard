@@ -963,24 +963,93 @@ function closeReader() {
 
 // ---------- settings & wiring ----------
 
+// One editable row per column. data-orig remembers the name the column had
+// when Settings opened, so a changed name is a rename (label carries over)
+// rather than a brand-new column.
+function columnRow(name, orig, isInbox) {
+  const input = el('input', { 'aria-label': 'Column name', 'data-orig': orig || '' });
+  input.value = name;
+  const row = el('div', { class: 'col-row' }, [input]);
+  if (isInbox) {
+    row.classList.add('inbox');
+    row.append(el('span', { class: 'hint' }, 'your inbox'));
+    return row;
+  }
+  const btn = (label, text, fn) => {
+    const b = el('button', { type: 'button', class: 'icon-btn', title: label, 'aria-label': label }, text);
+    b.addEventListener('click', fn);
+    return b;
+  };
+  row.append(
+    btn('Move up', '↑', () => {
+      const prev = row.previousElementSibling;
+      if (prev && !prev.classList.contains('inbox')) prev.before(row);
+    }),
+    btn('Move down', '↓', () => row.nextElementSibling?.after(row)),
+    btn('Remove column', '✕', () => row.remove()),
+  );
+  return row;
+}
+
 function openSettings() {
-  $('#set-columns').value = [settings.inboxName, ...settings.columns].join('\n');
+  $('#set-columns').replaceChildren(
+    columnRow(settings.inboxName, null, true),
+    ...settings.columns.map((n) => columnRow(n, n)),
+  );
   $('#set-archive').checked = settings.lastArchives;
   $('#set-client').value = settings.clientId;
+  $('#set-error').textContent = '';
   $('#settings').showModal();
 }
 
-function saveSettings() {
-  const names = [...new Set($('#set-columns').value.split('\n')
-    .map((s) => s.replace(/\//g, '-').trim())
-    .filter(Boolean))].slice(0, 9);
-  if (names.length < 2) { toast('Keep at least two columns.'); return; }
-  [settings.inboxName, ...settings.columns] = names;
-  settings.lastArchives = $('#set-archive').checked;
+// Read and check the form; returns { error } or the new settings.
+function readSettingsForm() {
+  const rows = [...$('#set-columns').querySelectorAll('input')].map((i) => ({
+    name: i.value.replace(/\//g, '-').trim(),
+    orig: i.dataset.orig,
+  }));
+  const [inbox, ...rest] = rows;
+  const cols = rest.filter((r) => r.name);
+  const names = [inbox.name || settings.inboxName, ...cols.map((r) => r.name)];
+  if (!cols.length) return { error: 'Keep at least one column besides your inbox.' };
+  if (names.length > 9) return { error: 'Nine columns at most.' };
+  if (new Set(names.map((n) => n.toLowerCase())).size !== names.length) return { error: 'Two columns have the same name.' };
+  return {
+    inboxName: names[0],
+    cols,
+    lastArchives: $('#set-archive').checked,
+    clientId: $('#set-client').value.trim(),
+  };
+}
+
+async function renameLabel(oldName, newName) {
+  let id = state.labelIds[oldName];
+  if (!id) {
+    const { labels = [] } = await api('/labels');
+    id = labels.find((l) => l.name === LABEL_PREFIX + oldName)?.id;
+  }
+  if (!id) return; // label was never created, so there is nothing to carry over
+  await api(`/labels/${id}`, { method: 'PATCH', body: { name: LABEL_PREFIX + newName } });
+  delete state.labelIds[oldName];
+  state.labelIds[newName] = id;
+}
+
+async function applySettings({ inboxName, cols, lastArchives, clientId }) {
+  for (const c of cols) {
+    if (!c.orig || c.orig === c.name) continue;
+    try {
+      await renameLabel(c.orig, c.name);
+    } catch (e) {
+      if (!(e instanceof AuthError)) toast(`Could not rename “${c.orig}”: ${e.message}`);
+      c.name = c.orig;
+    }
+  }
+  settings.inboxName = inboxName;
+  settings.columns = cols.map((c) => c.name);
+  settings.lastArchives = lastArchives;
   store.set('inboxName', settings.inboxName);
   store.set('columns', settings.columns);
   store.set('lastArchives', settings.lastArchives);
-  const clientId = $('#set-client').value.trim();
   if (clientId && clientId !== settings.clientId) {
     store.set('clientId', clientId);
     location.reload();
@@ -1035,7 +1104,23 @@ function wireUi() {
   // The browser's built-in ✕ in the search box empties it without submitting.
   $('#search').addEventListener('search', () => { if (!$('#search').value) clearSearch(); });
   $('#btn-settings').addEventListener('click', openSettings);
-  $('#settings').addEventListener('close', () => { if ($('#settings').returnValue === 'save') saveSettings(); });
+  $('#settings form').addEventListener('submit', (e) => {
+    if (e.submitter?.value !== 'save') return;
+    const result = readSettingsForm();
+    if (result.error) {
+      e.preventDefault();
+      $('#set-error').textContent = result.error;
+      return;
+    }
+    applySettings(result);
+  });
+  // Enter in a column name would otherwise trigger the form's first button (Cancel).
+  $('#set-columns').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+  $('#set-add').addEventListener('click', () => {
+    const row = columnRow('', null);
+    $('#set-columns').append(row);
+    row.querySelector('input').focus();
+  });
   $('#set-signout').addEventListener('click', () => { $('#settings').close(); signOut(); });
   $('#btn-setup-save').addEventListener('click', () => {
     const id = $('#setup-client').value.trim();
