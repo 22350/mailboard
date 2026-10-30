@@ -69,6 +69,22 @@ a { color: var(--accent); }
 .card .clip { display: flex; align-items: center; gap: .2rem; margin-top: .3rem; color: var(--muted); font-size: .8rem; }
 .card .clip svg { width: 14px; height: 14px; fill: currentColor; }
 .card.unread .people, .card.unread .subj { font-weight: 700; }
+.card.colored { border-left: 6px solid var(--card-color); }
+
+.color-pop {
+  position: fixed; z-index: 30; display: flex; gap: .4rem; padding: .5rem;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.2);
+}
+.swatch {
+  width: 36px; min-height: 36px; padding: 0; border-radius: 50%;
+  background: var(--swatch); border: 2px solid transparent;
+}
+.swatch:hover:not(:disabled) { border-color: var(--text); }
+.swatch.current { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--text); }
+.swatch.none { background: var(--col); color: var(--muted); }
+.color-btn { display: inline-flex; align-items: center; gap: .35rem; }
+.color-btn svg { width: 18px; height: 18px; fill: var(--swatch, currentColor); }
 .card-actions {
   position: absolute; top: .35rem; right: .35rem; display: none; gap: .15rem;
   background: var(--panel); padding-left: .4rem; border-radius: 8px;

@@ -6,6 +6,17 @@
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
 const LABEL_PREFIX = 'Board/';
+const COLOR_PREFIX = 'Board/Color/';
+// Background colors must come from Gmail's fixed label palette.
+const COLORS = [
+  { name: 'Red', bg: '#fb4c2f' },
+  { name: 'Orange', bg: '#ffad47' },
+  { name: 'Yellow', bg: '#fad165' },
+  { name: 'Green', bg: '#16a766' },
+  { name: 'Blue', bg: '#4a86e8' },
+  { name: 'Purple', bg: '#a479e2' },
+  { name: 'Pink', bg: '#f691b3' },
+];
 const REFRESH_MS = 2 * 60 * 1000;
 
 const $ = (sel) => document.querySelector(sel);
@@ -38,6 +49,7 @@ const state = {
   tokenExp: 0,
   me: store.get('email', ''),
   labelIds: {},        // column name -> Gmail label id
+  colorIds: {},        // color name -> Gmail label id (created on first use)
   threads: new Map(),  // thread id -> summary
   board: [],           // per column: sorted thread ids
   more: [],            // per column: Gmail has more than we fetched
@@ -148,6 +160,7 @@ async function mapLimit(items, limit, fn) {
 async function ensureLabels(cols) {
   const { labels = [] } = await api('/labels');
   const byName = Object.fromEntries(labels.map((l) => [l.name, l.id]));
+  for (const c of COLORS) if (byName[COLOR_PREFIX + c.name]) state.colorIds[c.name] = byName[COLOR_PREFIX + c.name];
   for (const col of cols) {
     if (col.inbox) continue;
     const name = LABEL_PREFIX + col.name;
@@ -338,6 +351,73 @@ async function toggleRead(id) {
   }
 }
 
+function colorOf(t) {
+  return COLORS.find((c) => state.colorIds[c.name] && t.labels.has(state.colorIds[c.name])) || null;
+}
+
+async function colorLabelId(color) {
+  if (state.colorIds[color.name]) return state.colorIds[color.name];
+  const name = COLOR_PREFIX + color.name;
+  const base = { name, labelListVisibility: 'labelHide', messageListVisibility: 'show' };
+  let made;
+  try {
+    made = await api('/labels', { method: 'POST', body: { ...base, color: { backgroundColor: color.bg, textColor: '#ffffff' } } });
+  } catch (e) {
+    if (e instanceof AuthError) throw e;
+    // Already exists (e.g. made on another computer), or the color was refused.
+    const { labels = [] } = await api('/labels');
+    made = labels.find((l) => l.name === name) || await api('/labels', { method: 'POST', body: base });
+  }
+  return (state.colorIds[color.name] = made.id);
+}
+
+async function setColor(id, color) {
+  const t = state.threads.get(id);
+  if (!t) return;
+  const before = new Set(t.labels);
+  try {
+    const add = color ? [await colorLabelId(color)] : [];
+    const remove = Object.values(state.colorIds).filter((l) => !add.includes(l) && t.labels.has(l));
+    if (add.every((l) => t.labels.has(l)) && !remove.length) return;
+    add.forEach((l) => t.labels.add(l));
+    remove.forEach((l) => t.labels.delete(l));
+    render();
+    refreshReaderActions(id);
+    await api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: add, removeLabelIds: remove } });
+  } catch (e) {
+    t.labels = before;
+    render();
+    refreshReaderActions(id);
+    if (!(e instanceof AuthError)) toast('Could not set color: ' + e.message);
+  }
+}
+
+function closeColorPicker() { $('#color-pop')?.remove(); }
+
+function openColorPicker(anchor, id) {
+  closeColorPicker();
+  const t = state.threads.get(id);
+  const current = t && colorOf(t);
+  const swatch = (label, color, extra) => {
+    const b = el('button', {
+      class: 'swatch' + (extra || '') + (color && color === current ? ' current' : ''),
+      title: label, 'aria-label': label, style: color ? `--swatch:${color.bg}` : null,
+    }, color ? null : '✕');
+    b.addEventListener('click', (e) => { e.stopPropagation(); closeColorPicker(); setColor(id, color); });
+    return b;
+  };
+  const pop = el('div', { class: 'color-pop', id: 'color-pop' }, [
+    ...COLORS.map((c) => swatch(c.name, c)),
+    swatch('No color', null, ' none'),
+  ]);
+  document.body.append(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.top = Math.min(r.bottom + 4, innerHeight - pop.offsetHeight - 8) + 'px';
+  pop.style.left = Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8)) + 'px';
+  pop.querySelector('button').focus();
+  setTimeout(() => document.addEventListener('click', closeColorPicker, { once: true }));
+}
+
 async function trashThread(id) {
   const t = state.threads.get(id);
   try {
@@ -433,6 +513,7 @@ const ICONS = {
   unread: 'M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z',
   read: 'M21.99 8c0-.72-.37-1.35-.94-1.7L12 1 2.95 6.3C2.38 6.65 2 7.28 2 8v10c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2l-.01-10zM12 13L3.74 7.84 12 3l8.26 4.84L12 13z',
   replied: 'M18 7l-1.41-1.41-6.34 6.34 1.41 1.41L18 7zm4.24-1.41L11.66 16.17 7.48 12l-1.41 1.41L11.66 19l12-12-1.42-1.41zM.41 13.41L6 19l1.41-1.41L1.83 12 .41 13.41z',
+  palette: 'M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5s1.5.67 1.5 1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z',
   clip: 'M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z',
 };
 
@@ -450,7 +531,7 @@ function icon(name, cls) {
 
 function iconButton(label, name, run) {
   const b = el('button', { class: 'icon-btn', title: label, 'aria-label': label, draggable: 'false' }, icon(name));
-  b.addEventListener('click', (e) => { e.stopPropagation(); run(); });
+  b.addEventListener('click', (e) => { e.stopPropagation(); run(b); });
   return b;
 }
 
@@ -528,8 +609,10 @@ function renderColumn(col, i) {
 }
 
 function renderCard(t, colIdx) {
+  const color = colorOf(t);
   const card = el('article', {
-    class: 'card' + (t.unread ? ' unread' : '') + (t.id === state.openId ? ' open' : ''),
+    class: 'card' + (t.unread ? ' unread' : '') + (t.id === state.openId ? ' open' : '') + (color ? ' colored' : ''),
+    style: color ? `--card-color:${color.bg}` : null,
     tabindex: '0', draggable: 'true', 'data-id': t.id, 'data-col': colIdx,
   }, [
     el('div', { class: 'top' }, [
@@ -544,6 +627,7 @@ function renderCard(t, colIdx) {
     ]),
     t.attachments ? el('div', { class: 'clip' }, [icon('clip'), String(t.attachments)]) : null,
     el('div', { class: 'card-actions' }, [
+      iconButton('Color', 'palette', (b) => openColorPicker(b, t.id)),
       iconButton('Archive', 'archive', () => archiveThread(t.id)),
       iconButton('Delete', 'trash', () => trashThread(t.id)),
       t.unread
@@ -669,6 +753,10 @@ function renderActions(box, id) {
   const current = t ? columnOf(t, cols) : -1;
   const del = el('button', {}, 'Delete');
   del.addEventListener('click', () => trashThread(id));
+  const color = t && colorOf(t);
+  const colorBtn = el('button', { class: 'color-btn', style: color ? `--swatch:${color.bg}` : null },
+    [icon('palette'), color ? color.name : 'Color']);
+  colorBtn.addEventListener('click', (e) => { e.stopPropagation(); openColorPicker(colorBtn, id); });
   const gmail = el('a', {
     href: `https://mail.google.com/mail/?authuser=${encodeURIComponent(state.me)}#all/${id}`,
     target: '_blank', rel: 'noopener',
@@ -681,6 +769,7 @@ function renderActions(box, id) {
       b.addEventListener('click', () => moveWithUndo(id, i));
       return b;
     }),
+    colorBtn,
     del,
     gmail,
   );
@@ -816,6 +905,7 @@ function saveSettings() {
 
 function onKey(e) {
   if (e.target.closest?.('input, textarea, dialog')) return;
+  if (e.key === 'Escape' && $('#color-pop')) { closeColorPicker(); return; }
   if (e.key === 'Escape' && !$('#reader').hidden) { closeReader(); return; }
   const card = document.activeElement?.closest?.('.card');
   if (!card || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -831,6 +921,9 @@ function onKey(e) {
     archiveThread(id);
   } else if (e.key === 'u') {
     toggleRead(id);
+  } else if (e.key === 'c') {
+    e.preventDefault();
+    openColorPicker(card, id);
   } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();
     (e.key === 'ArrowDown' ? card.nextElementSibling : card.previousElementSibling)?.focus();
