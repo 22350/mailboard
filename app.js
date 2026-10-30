@@ -1961,8 +1961,45 @@ async function start() {
   await loadBoard();
 }
 
+// ---------- auto-update ----------
+
+// deploy.sh stamps index.html with ?v=<version>. Poll for a newer stamp and
+// reload when it won't disrupt anything; otherwise offer a Reload button.
+const VERSION = /[?&]v=(\d+)/.exec(document.querySelector('script[src*="app.js"]')?.src || '')?.[1];
+let updateOffered = false;
+
+function canReloadQuietly() {
+  if (state.dragging || state.addingColumn || state.selected.size || state.search) return false;
+  if (!$('#reader').hidden || $('#menu') || $('#color-pop') || $('#status').textContent) return false;
+  return ![...document.querySelectorAll('input, textarea')].some((f) =>
+    (f.type !== 'checkbox' && f.value && f === document.activeElement) || (f.tagName === 'TEXTAREA' && f.value.trim()));
+}
+
+async function checkForUpdate() {
+  if (!VERSION) return;
+  try {
+    // cache: 'reload' also refreshes the browser's cached page, so reload() gets the new one.
+    const html = await (await fetch('./', { cache: 'reload' })).text();
+    const live = /app\.js\?v=(\d+)/.exec(html)?.[1];
+    if (!live || live <= VERSION) return;
+    if (canReloadQuietly()) { location.reload(); return; }
+    if (!updateOffered) {
+      updateOffered = true;
+      toast('Mailboard was updated.', { label: 'Reload', run: () => location.reload() });
+    }
+  } catch {} // offline or Pages hiccup: try again next time
+}
+
+function watchForUpdates() {
+  if (!VERSION) return;
+  setInterval(checkForUpdate, 5 * 60 * 1000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForUpdate(); });
+  addEventListener('focus', checkForUpdate);
+}
+
 async function boot() {
   wireUi();
+  watchForUpdates();
   if (!settings.clientId) { show('setup'); return; }
   try { await waitForGis(); } catch (e) { toast(e.message); return; }
   initAuth();
