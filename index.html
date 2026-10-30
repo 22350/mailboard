@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; connect-src 'self' https://gmail.googleapis.com https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src * data: blob:; font-src * data:; media-src *">
+<title>Mailboard</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://accounts.google.com/gsi/client" async></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<header class="bar">
+  <h1>Mailboard</h1>
+  <span id="status" class="status" role="status"></span>
+  <div class="spacer"></div>
+  <button id="btn-compose" hidden>Compose</button>
+  <button id="btn-refresh" hidden>Refresh</button>
+  <button id="btn-settings">Settings</button>
+</header>
+
+<div id="banner" class="banner" hidden>
+  <span>Your Google session expired.</span>
+  <button id="banner-btn" class="primary">Reconnect</button>
+</div>
+
+<main id="board" class="board" hidden></main>
+
+<section id="signin" class="center" hidden>
+  <p>Sign in with the Google account whose Gmail you want on the board.</p>
+  <button id="btn-signin" class="primary big">Sign in with Google</button>
+</section>
+
+<section id="setup" class="center" hidden>
+  <h2>First-time setup</h2>
+  <p>Paste the OAuth Client ID from Google Cloud Console (see README).</p>
+  <input id="setup-client" placeholder="1234-abc.apps.googleusercontent.com" autocomplete="off">
+  <button id="btn-setup-save" class="primary big">Save</button>
+</section>
+
+<aside id="reader" class="reader" hidden></aside>
+
+<dialog id="settings">
+  <form method="dialog">
+    <h2>Settings</h2>
+    <label>Columns after Inbox, one per line
+      <textarea id="set-columns" rows="5"></textarea>
+    </label>
+    <label class="check"><input type="checkbox" id="set-archive"> Last column archives mail (takes it out of Gmail's Inbox)</label>
+    <label>Google OAuth Client ID
+      <input id="set-client" autocomplete="off">
+    </label>
+    <p class="hint">Each column is a Gmail label under "Board/". Renaming a column creates a new label; the old one stays in Gmail.</p>
+    <div class="row">
+      <button id="set-signout" type="button">Sign out</button>
+      <div class="spacer"></div>
+      <button value="cancel">Cancel</button>
+      <button value="save" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+</body>
+</html>

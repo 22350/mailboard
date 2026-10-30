@@ -1,0 +1,788 @@
+'use strict';
+
+// Mailboard: Gmail as Kanban columns. Runs entirely in the browser; each
+// column (other than Inbox) is a Gmail label named "Board/<column>".
+
+const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
+const SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
+const LABEL_PREFIX = 'Board/';
+const REFRESH_MS = 2 * 60 * 1000;
+
+const $ = (sel) => document.querySelector(sel);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const store = {
+  get(key, fallback) {
+    try { const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); }
+    catch { return fallback; }
+  },
+  set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} },
+};
+
+const settings = {
+  clientId: store.get('clientId', ''),
+  columns: store.get('columns', ['To Do', 'Waiting', 'Done']),
+  lastArchives: store.get('lastArchives', true),
+};
+
+function columns() {
+  const cols = [{ name: 'Inbox', inbox: true }];
+  settings.columns.forEach((name, i) =>
+    cols.push({ name, archive: settings.lastArchives && i === settings.columns.length - 1 }));
+  return cols;
+}
+
+const state = {
+  token: null,
+  tokenExp: 0,
+  me: store.get('email', ''),
+  labelIds: {},        // column name -> Gmail label id
+  threads: new Map(),  // thread id -> summary
+  board: [],           // per column: sorted thread ids
+  openId: null,
+  dragging: false,
+  loading: false,
+  lastLoad: 0,
+};
+
+class AuthError extends Error {}
+
+// ---------- auth ----------
+
+let tokenClient = null;
+
+function waitForGis() {
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    (function check() {
+      if (window.google?.accounts?.oauth2) return resolve();
+      if (Date.now() - start > 15000) return reject(new Error('Could not load Google sign-in.'));
+      setTimeout(check, 100);
+    })();
+  });
+}
+
+function initAuth() {
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: settings.clientId,
+    scope: SCOPE,
+    callback: (resp) => {
+      if (resp.error) { toast('Sign-in failed: ' + resp.error); return; }
+      setToken(resp.access_token, resp.expires_in);
+      $('#banner').hidden = true;
+      start();
+    },
+    error_callback: (err) =>
+      toast(err.type === 'popup_closed' ? 'Sign-in window was closed.' : 'Sign-in failed: ' + err.type),
+  });
+}
+
+function setToken(token, expiresIn) {
+  state.token = token;
+  state.tokenExp = Date.now() + (Number(expiresIn) - 60) * 1000;
+  try { sessionStorage.setItem('token', JSON.stringify({ token, exp: state.tokenExp })); } catch {}
+}
+
+function restoreToken() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem('token'));
+    if (saved && saved.exp > Date.now()) {
+      state.token = saved.token;
+      state.tokenExp = saved.exp;
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+function signIn() {
+  tokenClient.requestAccessToken(state.me ? { login_hint: state.me } : {});
+}
+
+function needSignIn() {
+  state.token = null;
+  try { sessionStorage.removeItem('token'); } catch {}
+  if ($('#board').hidden) show('signin');
+  else $('#banner').hidden = false;
+}
+
+function signOut() {
+  if (state.token) google.accounts.oauth2.revoke(state.token, () => {});
+  state.token = null;
+  state.threads.clear();
+  try { sessionStorage.removeItem('token'); } catch {}
+  closeReader();
+  show('signin');
+}
+
+// ---------- Gmail API ----------
+
+async function api(path, { method = 'GET', body } = {}, attempt = 0) {
+  if (!state.token || Date.now() > state.tokenExp) { needSignIn(); throw new AuthError('Signed out'); }
+  const res = await fetch(API + path, {
+    method,
+    headers: { Authorization: 'Bearer ' + state.token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 401) { needSignIn(); throw new AuthError('Session expired'); }
+  if ((res.status === 429 || res.status >= 500) && attempt < 4) {
+    await sleep(500 * 2 ** attempt + Math.random() * 300);
+    return api(path, { method, body }, attempt + 1);
+  }
+  if (!res.ok) {
+    let msg = res.statusText;
+    try { msg = (await res.json()).error.message; } catch {}
+    throw new Error(msg);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+async function mapLimit(items, limit, fn) {
+  let next = 0;
+  const worker = async () => { while (next < items.length) await fn(items[next++]); };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+async function ensureLabels(cols) {
+  const { labels = [] } = await api('/labels');
+  const byName = Object.fromEntries(labels.map((l) => [l.name, l.id]));
+  for (const col of cols) {
+    if (col.inbox) continue;
+    const name = LABEL_PREFIX + col.name;
+    if (!byName[name]) {
+      const made = await api('/labels', {
+        method: 'POST',
+        body: { name, labelListVisibility: 'labelShow', messageListVisibility: 'show' },
+      });
+      byName[name] = made.id;
+    }
+    state.labelIds[col.name] = byName[name];
+  }
+}
+
+function header(msg, name) {
+  const h = msg.payload?.headers?.find((x) => x.name.toLowerCase() === name);
+  return h ? h.value : '';
+}
+
+function summarize(t) {
+  const msgs = t.messages || [];
+  const last = msgs[msgs.length - 1] || {};
+  const labels = new Set(msgs.flatMap((m) => m.labelIds || []));
+  return {
+    id: t.id,
+    historyId: t.historyId,
+    subject: header(msgs[0] || {}, 'subject') || '(no subject)',
+    from: displayName(header(last, 'from')),
+    snippet: decodeEntities(last.snippet || ''),
+    date: Number(last.internalDate || 0),
+    count: msgs.length,
+    unread: labels.has('UNREAD'),
+    labels,
+  };
+}
+
+// Which column a thread belongs in, or -1 if none.
+function columnOf(t, cols) {
+  for (let i = 1; i < cols.length; i++) {
+    if (!t.labels.has(state.labelIds[cols[i].name])) continue;
+    // A new reply to an archived ("Done") thread lands back in the Inbox.
+    if (cols[i].archive && t.labels.has('INBOX')) return 0;
+    return i;
+  }
+  return t.labels.has('INBOX') ? 0 : -1;
+}
+
+function assign(cols) {
+  state.board = cols.map(() => []);
+  for (const t of state.threads.values()) {
+    const c = columnOf(t, cols);
+    if (c >= 0) state.board[c].push(t.id);
+  }
+  for (const list of state.board) list.sort((a, b) => state.threads.get(b).date - state.threads.get(a).date);
+}
+
+async function loadBoard() {
+  if (state.loading || state.dragging || !state.token) return;
+  state.loading = true;
+  setStatus('Loading…');
+  try {
+    const cols = columns();
+    await ensureLabels(cols);
+    const lists = await Promise.all(cols.map((col) => {
+      const p = new URLSearchParams({
+        maxResults: col.archive ? '30' : '100',
+        labelIds: col.inbox ? 'INBOX' : state.labelIds[col.name],
+      });
+      return api('/threads?' + p).then((r) => r.threads || []);
+    }));
+    const seen = new Map();
+    for (const t of lists.flat()) seen.set(t.id, t.historyId);
+    const stale = [...seen].filter(([id, h]) => state.threads.get(id)?.historyId !== h).map(([id]) => id);
+    if (stale.length > 10) setStatus(`Loading ${stale.length} conversations…`);
+    await mapLimit(stale, 5, async (id) => {
+      try {
+        const t = await api(`/threads/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`);
+        state.threads.set(id, summarize(t));
+      } catch (e) {
+        if (e instanceof AuthError) throw e;
+        seen.delete(id); // deleted or moved while loading; skip it
+      }
+    });
+    for (const id of [...state.threads.keys()]) if (!seen.has(id)) state.threads.delete(id);
+    assign(cols);
+    render();
+    state.lastLoad = Date.now();
+    setStatus('Updated ' + dateLabel(Date.now()));
+  } catch (e) {
+    if (!(e instanceof AuthError)) toast('Could not load mail: ' + e.message);
+    setStatus('');
+  } finally {
+    state.loading = false;
+  }
+}
+
+async function moveThread(id, colIdx) {
+  const cols = columns();
+  const t = state.threads.get(id);
+  if (!t) return false;
+  const target = cols[colIdx];
+  const targetLabel = state.labelIds[target.name];
+  const add = [];
+  const remove = cols.slice(1).map((c) => state.labelIds[c.name]).filter((l) => l !== targetLabel);
+  if (!target.inbox) add.push(targetLabel);
+  if (target.archive) remove.push('INBOX'); else add.push('INBOX');
+
+  const before = new Set(t.labels);
+  add.forEach((l) => t.labels.add(l));
+  remove.forEach((l) => t.labels.delete(l));
+  assign(cols);
+  render();
+  refreshReaderActions(id);
+  try {
+    await api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: add, removeLabelIds: remove } });
+    return true;
+  } catch (e) {
+    t.labels = before;
+    assign(cols);
+    render();
+    refreshReaderActions(id);
+    if (!(e instanceof AuthError)) toast('Could not move: ' + e.message);
+    return false;
+  }
+}
+
+async function moveWithUndo(id, colIdx) {
+  const cols = columns();
+  const t = state.threads.get(id);
+  if (!t) return;
+  const prev = columnOf(t, cols);
+  if (prev === colIdx) return;
+  if (await moveThread(id, colIdx)) {
+    toast(`Moved to ${cols[colIdx].name}`, prev < 0 ? null : { label: 'Undo', run: () => moveThread(id, prev) });
+  }
+}
+
+async function trashThread(id) {
+  const t = state.threads.get(id);
+  try {
+    await api(`/threads/${id}/trash`, { method: 'POST' });
+    state.threads.delete(id);
+    assign(columns());
+    render();
+    if (state.openId === id) closeReader();
+    toast('Moved to Trash', {
+      label: 'Undo',
+      run: async () => {
+        try {
+          await api(`/threads/${id}/untrash`, { method: 'POST' });
+          if (t) state.threads.set(id, t);
+          assign(columns());
+          render();
+        } catch (e) { if (!(e instanceof AuthError)) toast(e.message); }
+      },
+    });
+  } catch (e) {
+    if (!(e instanceof AuthError)) toast('Could not delete: ' + e.message);
+  }
+}
+
+// ---------- sending ----------
+
+const utf8 = (s) => new TextEncoder().encode(s);
+
+function bytesToB64(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+const b64url = (bytes) => bytesToB64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+function b64urlBytes(data) {
+  const s = atob(data.replace(/-/g, '+').replace(/_/g, '/'));
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out;
+}
+
+const encodeWord = (s) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${bytesToB64(utf8(s))}?=`);
+
+async function sendMail(headers, body, threadId) {
+  const lines = [];
+  for (const [k, v] of Object.entries(headers)) if (v) lines.push(`${k}: ${k === 'Subject' ? encodeWord(v) : v}`);
+  const encoded = bytesToB64(utf8(body.replace(/\r?\n/g, '\r\n'))).replace(/.{76}/g, '$&\r\n');
+  lines.push('MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', encoded);
+  const raw = b64url(utf8(lines.join('\r\n')));
+  return api('/messages/send', { method: 'POST', body: threadId ? { raw, threadId } : { raw } });
+}
+
+const addrOf = (s) => (/<([^>]+)>/.exec(s)?.[1] || s).trim().toLowerCase();
+const splitAddrs = (s) => s.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map((a) => a.trim()).filter(Boolean);
+
+function replyHeaders(m, all) {
+  const from = header(m, 'from');
+  const me = state.me.toLowerCase();
+  const mine = addrOf(from) === me;
+  const to = mine ? header(m, 'to') : (header(m, 'reply-to') || from);
+  let cc = '';
+  if (all) {
+    const toAddrs = new Set(splitAddrs(to).map(addrOf));
+    cc = splitAddrs([header(m, 'to'), header(m, 'cc')].filter(Boolean).join(','))
+      .filter((a) => addrOf(a) !== me && !toAddrs.has(addrOf(a)))
+      .join(', ');
+  }
+  let subject = header(m, 'subject');
+  if (!/^re:/i.test(subject)) subject = 'Re: ' + subject;
+  const msgId = header(m, 'message-id');
+  return {
+    To: to,
+    Cc: cc,
+    Subject: subject,
+    'In-Reply-To': msgId,
+    References: [header(m, 'references'), msgId].filter(Boolean).join(' '),
+  };
+}
+
+// ---------- rendering ----------
+
+function el(tag, attrs = {}, children = []) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) if (v != null && v !== false) node.setAttribute(k, v);
+  for (const c of [].concat(children)) if (c != null) node.append(c);
+  return node;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+function decodeEntities(s) {
+  return new DOMParser().parseFromString(s, 'text/html').documentElement.textContent;
+}
+
+function displayName(from) {
+  const m = /^\s*"?([^"<]*?)"?\s*<([^>]+)>/.exec(from);
+  return (m && (m[1].trim() || m[2])) || from || '(unknown)';
+}
+
+function dateLabel(ms, full) {
+  const d = new Date(ms);
+  const now = new Date();
+  const time = { hour: 'numeric', minute: '2-digit' };
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], time);
+  const opts = { month: 'short', day: 'numeric' };
+  if (d.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
+  return full ? d.toLocaleString([], { ...opts, ...time }) : d.toLocaleDateString([], opts);
+}
+
+function setStatus(text) { $('#status').textContent = text; }
+
+let toastTimer;
+function toast(msg, action) {
+  const box = $('#toast');
+  box.replaceChildren(el('span', {}, msg));
+  if (action) {
+    const b = el('button', {}, action.label);
+    b.addEventListener('click', () => { box.hidden = true; action.run(); });
+    box.append(b);
+  }
+  box.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { box.hidden = true; }, action ? 8000 : 5000);
+}
+
+function show(view) {
+  for (const id of ['board', 'signin', 'setup']) $('#' + id).hidden = id !== view;
+  $('#btn-compose').hidden = $('#btn-refresh').hidden = view !== 'board';
+}
+
+function render() {
+  const cols = columns();
+  const board = $('#board');
+  const focusedId = document.activeElement?.closest?.('.card')?.dataset.id;
+  const scrolls = [...board.querySelectorAll('.cards')].map((c) => c.scrollTop);
+  board.replaceChildren(...cols.map((col, i) => renderColumn(col, i)));
+  board.querySelectorAll('.cards').forEach((c, i) => { c.scrollTop = scrolls[i] || 0; });
+  if (focusedId) board.querySelector(`.card[data-id="${focusedId}"]`)?.focus({ preventScroll: true });
+}
+
+function renderColumn(col, i) {
+  const ids = state.board[i] || [];
+  const node = el('section', { class: 'column', 'data-col': i }, [
+    el('h2', {}, [el('span', { class: 'key', title: `Press ${i + 1} to move the selected card here` }, String(i + 1)),
+      col.name, el('span', { class: 'count' }, String(ids.length))]),
+    el('div', { class: 'cards' }, ids.map((id) => renderCard(state.threads.get(id), i))),
+  ]);
+  node.addEventListener('dragover', (e) => { e.preventDefault(); node.classList.add('drop'); });
+  node.addEventListener('dragleave', (e) => { if (!node.contains(e.relatedTarget)) node.classList.remove('drop'); });
+  node.addEventListener('drop', (e) => {
+    e.preventDefault();
+    node.classList.remove('drop');
+    state.dragging = false;
+    const id = e.dataTransfer.getData('text/plain');
+    if (id) moveWithUndo(id, i);
+  });
+  return node;
+}
+
+function renderCard(t, colIdx) {
+  const card = el('article', {
+    class: 'card' + (t.unread ? ' unread' : '') + (t.id === state.openId ? ' open' : ''),
+    tabindex: '0', draggable: 'true', 'data-id': t.id, 'data-col': colIdx,
+  }, [
+    el('div', { class: 'meta' }, [el('span', { class: 'from' }, t.from), el('time', {}, dateLabel(t.date))]),
+    el('div', { class: 'subject' }, t.subject + (t.count > 1 ? ` (${t.count})` : '')),
+    el('div', { class: 'snippet' }, t.snippet),
+  ]);
+  card.addEventListener('dragstart', (e) => {
+    state.dragging = true;
+    e.dataTransfer.setData('text/plain', t.id);
+    e.dataTransfer.effectAllowed = 'move';
+    card.classList.add('dragging');
+  });
+  card.addEventListener('dragend', () => { state.dragging = false; card.classList.remove('dragging'); });
+  card.addEventListener('click', () => openThread(t.id));
+  return card;
+}
+
+// ---------- reader ----------
+
+function findPart(part, mime) {
+  if (!part) return null;
+  if (part.mimeType === mime && part.body?.data && !part.filename) return part;
+  for (const p of part.parts || []) { const hit = findPart(p, mime); if (hit) return hit; }
+  return null;
+}
+
+function attachmentsOf(part, out = []) {
+  if (!part) return out;
+  if (part.filename && part.body?.attachmentId) out.push(part);
+  for (const p of part.parts || []) attachmentsOf(p, out);
+  return out;
+}
+
+function decodePart(part) {
+  const ct = (part.headers || []).find((h) => h.name.toLowerCase() === 'content-type')?.value || '';
+  const charset = /charset="?([^";\s]+)/i.exec(ct)?.[1] || 'utf-8';
+  const bytes = b64urlBytes(part.body.data);
+  try { return new TextDecoder(charset).decode(bytes); } catch { return new TextDecoder().decode(bytes); }
+}
+
+const FRAME_HEAD = '<!doctype html><meta charset="utf-8"><base target="_blank"><style>' +
+  'html,body{margin:0;background:#fff;color:#111;font:15px/1.5 system-ui,sans-serif;overflow-wrap:anywhere}' +
+  'img{max-width:100%;height:auto}table{max-width:100%}</style>';
+
+function bodyFrame(m) {
+  const html = findPart(m.payload, 'text/html');
+  const text = html ? null : findPart(m.payload, 'text/plain');
+  const content = html ? decodePart(html)
+    : text ? `<div style="white-space:pre-wrap">${escapeHtml(decodePart(text))}</div>`
+    : '<p><i>(no text content)</i></p>';
+  // No allow-scripts: email content can never run code. allow-same-origin
+  // lets us measure the content to size the frame.
+  const frame = el('iframe', {
+    class: 'body', title: 'Message',
+    sandbox: 'allow-same-origin allow-popups allow-popups-to-escape-sandbox',
+  });
+  frame.srcdoc = FRAME_HEAD + content;
+  frame.addEventListener('load', () => {
+    const doc = frame.contentDocument;
+    if (!doc) return;
+    const fit = () => { frame.style.height = doc.documentElement.scrollHeight + 'px'; };
+    fit();
+    new ResizeObserver(fit).observe(doc.body);
+  });
+  return frame;
+}
+
+async function downloadAttachment(msgId, part) {
+  try {
+    const r = await api(`/messages/${msgId}/attachments/${part.body.attachmentId}`);
+    const url = URL.createObjectURL(new Blob([b64urlBytes(r.data)], { type: part.mimeType }));
+    const a = el('a', { href: url, download: part.filename });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (e) {
+    if (!(e instanceof AuthError)) toast('Download failed: ' + e.message);
+  }
+}
+
+function renderMessage(m, expanded) {
+  const from = header(m, 'from');
+  const to = header(m, 'to');
+  const cc = header(m, 'cc');
+  const details = el('details', { class: 'message' }, [
+    el('summary', {}, [
+      el('strong', {}, displayName(from)),
+      el('time', {}, dateLabel(Number(m.internalDate), true)),
+      el('div', { class: 'snippet' }, decodeEntities(m.snippet || '')),
+    ]),
+  ]);
+  let loaded = false;
+  const load = () => {
+    if (loaded) return;
+    loaded = true;
+    details.append(el('div', { class: 'addr' }, `From ${from}` + (to ? ` · To ${to}` : '') + (cc ? ` · Cc ${cc}` : '')));
+    details.append(bodyFrame(m));
+    const files = attachmentsOf(m.payload);
+    if (files.length) {
+      details.append(el('div', { class: 'files' }, files.map((p) => {
+        const b = el('button', {}, '📎 ' + p.filename);
+        b.addEventListener('click', () => downloadAttachment(m.id, p));
+        return b;
+      })));
+    }
+  };
+  details.open = expanded;
+  if (expanded) load();
+  details.addEventListener('toggle', () => { if (details.open) load(); });
+  return details;
+}
+
+function refreshReaderActions(id) {
+  const box = $('#reader-actions');
+  if (box && state.openId === id) renderActions(box, id);
+}
+
+function renderActions(box, id) {
+  const cols = columns();
+  const t = state.threads.get(id);
+  const current = t ? columnOf(t, cols) : -1;
+  const del = el('button', {}, 'Delete');
+  del.addEventListener('click', () => trashThread(id));
+  const gmail = el('a', {
+    href: `https://mail.google.com/mail/?authuser=${encodeURIComponent(state.me)}#all/${id}`,
+    target: '_blank', rel: 'noopener',
+  }, 'Open in Gmail');
+  box.replaceChildren(
+    el('span', { class: 'label' }, 'Move to'),
+    ...cols.map((c, i) => {
+      const b = el('button', { class: i === current ? 'current' : null }, c.name);
+      b.disabled = i === current;
+      b.addEventListener('click', () => moveWithUndo(id, i));
+      return b;
+    }),
+    del,
+    gmail,
+  );
+}
+
+function renderReplyBox(last, threadId) {
+  const ta = el('textarea', { rows: '6', placeholder: 'Write a reply…' });
+  const all = el('input', { type: 'checkbox' });
+  const send = el('button', { class: 'primary' }, 'Send reply');
+  send.addEventListener('click', async () => {
+    if (!ta.value.trim()) { ta.focus(); return; }
+    send.disabled = true;
+    send.textContent = 'Sending…';
+    try {
+      await sendMail(replyHeaders(last, all.checked), ta.value, threadId);
+      toast('Reply sent');
+      openThread(threadId);
+      loadBoard();
+    } catch (e) {
+      if (!(e instanceof AuthError)) toast('Send failed: ' + e.message);
+      send.disabled = false;
+      send.textContent = 'Send reply';
+    }
+  });
+  return el('div', { class: 'reply' }, [ta, el('div', { class: 'row' }, [el('label', { class: 'check' }, [all, 'Reply all']), send])]);
+}
+
+function readerHead(title) {
+  const close = el('button', { 'aria-label': 'Close' }, '✕');
+  close.addEventListener('click', closeReader);
+  return el('div', { class: 'reader-head' }, [el('h2', {}, title), close]);
+}
+
+async function openThread(id) {
+  state.openId = id;
+  document.querySelectorAll('.card.open').forEach((c) => c.classList.remove('open'));
+  document.querySelector(`.card[data-id="${id}"]`)?.classList.add('open');
+  const reader = $('#reader');
+  reader.hidden = false;
+  reader.replaceChildren(el('p', { class: 'hint' }, 'Loading…'));
+  try {
+    const thread = await api(`/threads/${id}?format=full`);
+    if (state.openId !== id) return;
+    const msgs = thread.messages || [];
+    const actions = el('div', { class: 'actions', id: 'reader-actions' });
+    renderActions(actions, id);
+    reader.replaceChildren(
+      readerHead(header(msgs[0] || {}, 'subject') || '(no subject)'),
+      actions,
+      el('div', { class: 'messages' }, msgs.map((m, i) =>
+        renderMessage(m, i === msgs.length - 1 || (m.labelIds || []).includes('UNREAD')))),
+      renderReplyBox(msgs[msgs.length - 1], id),
+    );
+    const t = state.threads.get(id);
+    if (t?.unread) {
+      await api(`/threads/${id}/modify`, { method: 'POST', body: { removeLabelIds: ['UNREAD'] } });
+      t.unread = false;
+      t.labels.delete('UNREAD');
+      render();
+    }
+  } catch (e) {
+    if (!(e instanceof AuthError) && state.openId === id) {
+      reader.replaceChildren(readerHead('Error'), el('p', { class: 'hint' }, 'Could not open: ' + e.message));
+    }
+  }
+}
+
+function openCompose() {
+  state.openId = null;
+  document.querySelectorAll('.card.open').forEach((c) => c.classList.remove('open'));
+  const to = el('input', { placeholder: 'To', autocomplete: 'email' });
+  const subject = el('input', { placeholder: 'Subject' });
+  const body = el('textarea', { rows: '12', placeholder: 'Message' });
+  const send = el('button', { class: 'primary' }, 'Send');
+  send.addEventListener('click', async () => {
+    if (!to.value.trim()) { to.focus(); return; }
+    send.disabled = true;
+    send.textContent = 'Sending…';
+    try {
+      await sendMail({ To: to.value.trim(), Subject: subject.value }, body.value);
+      toast('Sent');
+      closeReader();
+    } catch (e) {
+      if (!(e instanceof AuthError)) toast('Send failed: ' + e.message);
+      send.disabled = false;
+      send.textContent = 'Send';
+    }
+  });
+  const reader = $('#reader');
+  reader.replaceChildren(readerHead('New message'), el('div', { class: 'compose' }, [to, subject, body, el('div', { class: 'row' }, [send])]));
+  reader.hidden = false;
+  to.focus();
+}
+
+function closeReader() {
+  const id = state.openId;
+  state.openId = null;
+  $('#reader').hidden = true;
+  $('#reader').replaceChildren();
+  document.querySelectorAll('.card.open').forEach((c) => c.classList.remove('open'));
+  if (id) document.querySelector(`.card[data-id="${id}"]`)?.focus();
+}
+
+// ---------- settings & wiring ----------
+
+function openSettings() {
+  $('#set-columns').value = settings.columns.join('\n');
+  $('#set-archive').checked = settings.lastArchives;
+  $('#set-client').value = settings.clientId;
+  $('#settings').showModal();
+}
+
+function saveSettings() {
+  const names = [...new Set($('#set-columns').value.split('\n')
+    .map((s) => s.replace(/\//g, '-').trim())
+    .filter((s) => s && s.toLowerCase() !== 'inbox'))].slice(0, 8);
+  if (!names.length) { toast('Keep at least one column besides Inbox.'); return; }
+  settings.columns = names;
+  settings.lastArchives = $('#set-archive').checked;
+  store.set('columns', names);
+  store.set('lastArchives', settings.lastArchives);
+  const clientId = $('#set-client').value.trim();
+  if (clientId && clientId !== settings.clientId) {
+    store.set('clientId', clientId);
+    location.reload();
+    return;
+  }
+  assign(columns());
+  render();
+  loadBoard();
+}
+
+function onKey(e) {
+  if (e.target.closest?.('input, textarea, dialog')) return;
+  if (e.key === 'Escape' && !$('#reader').hidden) { closeReader(); return; }
+  const card = document.activeElement?.closest?.('.card');
+  if (!card || e.ctrlKey || e.metaKey || e.altKey) return;
+  const id = card.dataset.id;
+  const col = Number(card.dataset.col);
+  if (/^[1-9]$/.test(e.key) && Number(e.key) <= columns().length) {
+    e.preventDefault();
+    moveWithUndo(id, Number(e.key) - 1);
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    openThread(id);
+  } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    (e.key === 'ArrowDown' ? card.nextElementSibling : card.previousElementSibling)?.focus();
+  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    const target = document.querySelector(`.column[data-col="${col + (e.key === 'ArrowRight' ? 1 : -1)}"] .cards`);
+    if (target?.children.length) {
+      const idx = [...card.parentNode.children].indexOf(card);
+      target.children[Math.min(idx, target.children.length - 1)].focus();
+    }
+  }
+}
+
+function wireUi() {
+  $('#btn-signin').addEventListener('click', signIn);
+  $('#banner-btn').addEventListener('click', signIn);
+  $('#btn-refresh').addEventListener('click', loadBoard);
+  $('#btn-compose').addEventListener('click', openCompose);
+  $('#btn-settings').addEventListener('click', openSettings);
+  $('#settings').addEventListener('close', () => { if ($('#settings').returnValue === 'save') saveSettings(); });
+  $('#set-signout').addEventListener('click', () => { $('#settings').close(); signOut(); });
+  $('#btn-setup-save').addEventListener('click', () => {
+    const id = $('#setup-client').value.trim();
+    if (!id) return;
+    store.set('clientId', id);
+    location.reload();
+  });
+  document.addEventListener('keydown', onKey);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && Date.now() - state.lastLoad > 60000) loadBoard();
+  });
+  setInterval(() => { if (document.visibilityState === 'visible') loadBoard(); }, REFRESH_MS);
+}
+
+async function start() {
+  show('board');
+  if (!state.me) {
+    try {
+      state.me = (await api('/profile')).emailAddress;
+      store.set('email', state.me);
+    } catch (e) {
+      if (!(e instanceof AuthError)) toast(e.message);
+      return;
+    }
+  }
+  await loadBoard();
+}
+
+async function boot() {
+  wireUi();
+  if (!settings.clientId) { show('setup'); return; }
+  try { await waitForGis(); } catch (e) { toast(e.message); return; }
+  initAuth();
+  if (restoreToken()) start(); else show('signin');
+}
+
+boot();
