@@ -59,6 +59,15 @@ a { color: var(--accent); }
 .column h2 { font-size: 1rem; margin: 0; padding: .8rem 1rem; display: flex; gap: .5rem; align-items: center; }
 .column .key { font-size: .75rem; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 .35rem; }
 .column .count { margin-left: auto; color: var(--muted); font-weight: normal; }
+.column h2 .icon-btn { width: 30px; min-height: 30px; font-size: .95rem; opacity: .55; }
+.column h2 .icon-btn:hover { opacity: 1; }
+.add-column { flex: 0 0 auto; display: flex; align-items: flex-start; }
+.add-btn {
+  width: 52px; min-height: 52px; font-size: 1.7rem; line-height: 1; border-radius: 12px;
+  border: 2px dashed var(--border); background: transparent; color: var(--muted);
+}
+.add-btn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.add-column input { width: 260px; }
 .cards { flex: 1; overflow-y: auto; padding: 0 .6rem .6rem; display: flex; flex-direction: column; gap: .5rem; }
 
 .card {

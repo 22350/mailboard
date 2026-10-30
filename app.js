@@ -54,6 +54,7 @@ const state = {
   board: [],           // per column: sorted thread ids
   more: [],            // per column: Gmail has more than we fetched
   search: null,        // { q, ids, more } while search results are shown
+  addingColumn: false, // the "new column" name box is open; don't re-render under it
   openId: null,
   dragging: false,
   loading: false,
@@ -272,7 +273,7 @@ function clearSearch() {
 }
 
 async function loadBoard() {
-  if (state.loading || state.dragging || !state.token) return;
+  if (state.loading || state.dragging || state.addingColumn || !state.token) return;
   state.loading = true;
   setStatus('Loading…');
   try {
@@ -594,8 +595,8 @@ function icon(name, cls) {
   return svg;
 }
 
-function iconButton(label, name, run) {
-  const b = el('button', { class: 'icon-btn', title: label, 'aria-label': label, draggable: 'false' }, icon(name));
+function iconButton(label, name, run, text) {
+  const b = el('button', { class: 'icon-btn', title: label, 'aria-label': label, draggable: 'false' }, name ? icon(name) : text);
   b.addEventListener('click', (e) => { e.stopPropagation(); run(b); });
   return b;
 }
@@ -652,9 +653,62 @@ function render() {
   board.replaceChildren(
     ...(state.search ? [renderSearchColumn()] : []),
     ...cols.map((col, i) => renderColumn(col, i)),
+    renderAddColumn(),
   );
   board.querySelectorAll('.cards').forEach((c, i) => { c.scrollTop = scrolls[i] || 0; });
   if (focusedId) board.querySelector(`.card[data-id="${focusedId}"]`)?.focus({ preventScroll: true });
+}
+
+function saveColumnList(list) {
+  settings.columns = list;
+  store.set('columns', list);
+  assign(columns());
+  render();
+  loadBoard();
+}
+
+function removeColumn(i) {
+  if (settings.columns.length <= 1) { toast('Keep at least one column besides your inbox.'); return; }
+  const before = [...settings.columns];
+  const name = before[i - 1];
+  saveColumnList(before.filter((_, k) => k !== i - 1));
+  toast(`Removed “${name}”. Its emails keep the label in Gmail.`, { label: 'Undo', run: () => saveColumnList(before) });
+}
+
+function addColumn(name) {
+  const existing = [settings.inboxName, ...settings.columns].map((n) => n.toLowerCase());
+  if (existing.includes(name.toLowerCase())) { toast('There is already a column with that name.'); return; }
+  if (existing.length >= 9) { toast('Nine columns at most.'); return; }
+  const list = [...settings.columns];
+  // Keep the archiving column last, if there is one.
+  if (settings.lastArchives) list.splice(list.length - 1, 0, name); else list.push(name);
+  saveColumnList(list);
+}
+
+function renderAddColumn() {
+  const tile = el('div', { class: 'add-column' });
+  const plus = el('button', { class: 'add-btn', title: 'Add column', 'aria-label': 'Add column' }, '+');
+  plus.addEventListener('click', () => {
+    state.addingColumn = true;
+    const input = el('input', { placeholder: 'New column name', 'aria-label': 'New column name' });
+    let finished = false;
+    const finish = (save) => {
+      if (finished) return;
+      finished = true;
+      state.addingColumn = false;
+      const name = input.value.replace(/\//g, '-').trim();
+      if (save && name) addColumn(name); else render();
+    };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      if (e.key === 'Escape') finish(false);
+    });
+    input.addEventListener('blur', () => finish(true));
+    tile.replaceChildren(input);
+    input.focus();
+  });
+  tile.append(plus);
+  return tile;
 }
 
 function renderSearchColumn() {
@@ -673,7 +727,8 @@ function renderColumn(col, i) {
   const ids = state.board[i] || [];
   const node = el('section', { class: 'column', 'data-col': i }, [
     el('h2', {}, [el('span', { class: 'key', title: `Press ${i + 1} to move the selected card here` }, String(i + 1)),
-      col.name, el('span', { class: 'count' }, ids.length + (state.more[i] ? '+' : ''))]),
+      col.name, el('span', { class: 'count' }, ids.length + (state.more[i] ? '+' : '')),
+      i > 0 ? iconButton(`Remove column “${col.name}”`, null, () => removeColumn(i), '✕') : null]),
     el('div', { class: 'cards' }, ids.map((id) => renderCard(state.threads.get(id), i))),
   ]);
   node.addEventListener('dragover', (e) => { e.preventDefault(); node.classList.add('drop'); });
