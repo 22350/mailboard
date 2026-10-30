@@ -4,7 +4,8 @@
 // column (other than Inbox) is a Gmail label named "Board/<column>".
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
-const SCOPE = 'https://www.googleapis.com/auth/gmail.modify';
+// Full access: gmail.modify can move mail to Trash but not delete it forever.
+const SCOPE = 'https://mail.google.com/';
 const LABEL_PREFIX = 'Board/';
 const COLOR_PREFIX = 'Board/Color/';
 // Background colors must come from Gmail's fixed label palette.
@@ -106,13 +107,14 @@ function initAuth() {
 function setToken(token, expiresIn) {
   state.token = token;
   state.tokenExp = Date.now() + (Number(expiresIn) - 60) * 1000;
-  try { sessionStorage.setItem('token', JSON.stringify({ token, exp: state.tokenExp })); } catch {}
+  try { sessionStorage.setItem('token', JSON.stringify({ token, exp: state.tokenExp, scope: SCOPE })); } catch {}
 }
 
 function restoreToken() {
   try {
     const saved = JSON.parse(sessionStorage.getItem('token'));
-    if (saved && saved.exp > Date.now()) {
+    // A token from before a scope change lacks permissions; sign in again.
+    if (saved && saved.exp > Date.now() && saved.scope === SCOPE) {
       state.token = saved.token;
       state.tokenExp = saved.exp;
       return true;
@@ -476,6 +478,9 @@ async function refreshAfterBulk() {
 
 async function runBulk(action, arg) {
   const all = state.selectAll;
+  if (action === 'trash' && (all ? all.scope.labelIds === 'TRASH' : state.searchArgs?.folder?.label === 'TRASH')) {
+    return bulkDeleteForever(all);
+  }
   try {
     const change = await bulkChange(action, arg);
     let count;
@@ -510,6 +515,30 @@ async function runBulk(action, arg) {
   } catch (e) {
     setStatus('');
     if (!(e instanceof AuthError)) toast('Could not update: ' + e.message);
+  }
+}
+
+async function bulkDeleteForever(all) {
+  if (!all) {
+    if (await deleteForever([...state.selected])) clearSelection();
+    return;
+  }
+  const t = all.total;
+  const howMany = t ? `${t.exact ? '' : 'about '}${t.n.toLocaleString()}` : 'all';
+  if (!confirm(`Delete ${howMany} conversations in ${all.scope.name} forever? This can't be undone.`)) return;
+  try {
+    const ids = await listAllMessageIds(all.scope);
+    for (let i = 0; i < ids.length; i += 1000) {
+      setStatus(`Deleting… ${Math.min(i + 1000, ids.length).toLocaleString()} of ${ids.length.toLocaleString()}`);
+      await api('/messages/batchDelete', { method: 'POST', body: { ids: ids.slice(i, i + 1000) } });
+    }
+    clearSelection();
+    setStatus('');
+    await refreshAfterBulk();
+    toast(`Deleted forever: ${ids.length.toLocaleString()} messages`);
+  } catch (e) {
+    setStatus('');
+    if (!(e instanceof AuthError)) toast('Could not delete: ' + e.message);
   }
 }
 
@@ -552,7 +581,7 @@ function renderBulk() {
   const close = el('button', { class: 'icon-btn', title: 'Clear selection', 'aria-label': 'Clear selection' }, '✕');
   close.addEventListener('click', clearSelection);
   bar.replaceChildren(info, el('div', { class: 'bulk-actions' }, [
-    move, color, act('Archive', 'archive'), act('Spam', 'spam'), act('Delete', 'trash'),
+    move, color, act('Archive', 'archive'), act('Spam', 'spam'), act(state.searchArgs?.folder?.label === 'TRASH' ? 'Delete forever' : 'Delete', 'trash'),
     act('Mark read', 'read'), act('Mark unread', 'unread'), close,
   ]));
   bar.hidden = false;
@@ -1094,6 +1123,7 @@ async function spamThread(id) {
 
 async function trashThread(id) {
   const t = state.threads.get(id);
+  if (t?.labels.has('TRASH')) return deleteForever([id]);
   try {
     await api(`/threads/${id}/trash`, { method: 'POST' });
     state.threads.delete(id);
@@ -1113,6 +1143,31 @@ async function trashThread(id) {
     });
   } catch (e) {
     if (!(e instanceof AuthError)) toast('Could not delete: ' + e.message);
+  }
+}
+
+// Permanently delete threads that are already in Trash. No undo.
+async function deleteForever(threadIds) {
+  const n = threadIds.length;
+  if (!confirm(`Delete ${n === 1 ? 'this conversation' : n.toLocaleString() + ' conversations'} forever? This can't be undone.`)) return false;
+  try {
+    setStatus(n > 1 ? 'Deleting…' : '');
+    await mapLimit(threadIds, 5, (id) => api(`/threads/${id}`, { method: 'DELETE' }));
+    for (const id of threadIds) {
+      state.threads.delete(id);
+      state.selected.delete(id);
+      if (state.openId === id) closeReader();
+    }
+    if (state.search) state.search.ids = state.search.ids.filter((id) => state.threads.has(id));
+    setStatus('');
+    assign(columns());
+    render();
+    toast(n === 1 ? 'Deleted forever' : `Deleted forever: ${n.toLocaleString()} conversations`);
+    return true;
+  } catch (e) {
+    setStatus('');
+    if (!(e instanceof AuthError)) toast('Could not delete: ' + e.message);
+    return false;
   }
 }
 
