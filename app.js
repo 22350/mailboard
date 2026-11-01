@@ -5,7 +5,9 @@
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 // Full access: gmail.modify can move mail to Trash but not delete it forever.
-const SCOPE = 'https://mail.google.com/';
+// Full Gmail access (delete forever needs it), plus read-only Contacts and "Other contacts" (people you've
+// emailed) for address suggestions in To. A scope change makes everyone sign in once more.
+const SCOPE = 'https://mail.google.com/ https://www.googleapis.com/auth/contacts.readonly https://www.googleapis.com/auth/contacts.other.readonly';
 const LABEL_PREFIX = 'Board/';
 const COLOR_PREFIX = 'Board/Color/';
 // Mailboard's own snooze (Gmail's API can't snooze): a hidden label holds the wake time in UTC, e.g.
@@ -1464,6 +1466,7 @@ function el(tag, attrs = {}, children = []) {
 const ICONS = {
   sort: 'M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z',
   widen: 'M4 12l4-4v3h8V8l4 4-4 4v-3H8v3z',
+  person: 'M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z',
   mail: 'M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z',
   search: 'M15.5 14h-.79l-.28-.27A6.47 6.47 0 0016 9.5 6.5 6.5 0 109.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z',
   narrow: 'M10 12L6 8v3H2v2h4v3zm4 0l4-4v3h4v2h-4v3z',
@@ -2317,15 +2320,115 @@ async function openThread(id) {
 
 // New message, with the same editor and controls as replies. Closing it with anything typed keeps it
 // as a Gmail draft; a new-message draft opened from the Drafts folder comes back here (draft = { id, message }).
+// ---------- address suggestions (To field) ----------
+// Google Contacts + "Other contacts" via the People API (needs it turned on in the Cloud project);
+// addresses from loaded emails are always added, so suggestions work even without it.
+let contactsLoad = null;
+function loadContacts() {
+  if (contactsLoad) return contactsLoad;
+  contactsLoad = (async () => {
+    const list = [];
+    const grab = async (path, key) => {
+      let page = '';
+      do {
+        const res = await fetch(`https://people.googleapis.com/v1/${path}${page ? '&pageToken=' + page : ''}`,
+          { headers: { Authorization: 'Bearer ' + state.token } });
+        if (!res.ok) throw new Error(res.status === 403 ? 'People API is off' : res.statusText);
+        const r = await res.json();
+        for (const p of r[key] || []) {
+          const name = p.names?.[0]?.displayName || '';
+          for (const e of p.emailAddresses || []) if (e.value) list.push({ name, addr: e.value.toLowerCase(), saved: key === 'connections' });
+        }
+        page = r.nextPageToken;
+      } while (page);
+    };
+    try {
+      await grab('people/me/connections?personFields=names,emailAddresses&pageSize=1000', 'connections');
+      await grab('otherContacts?readMask=names,emailAddresses&pageSize=1000', 'otherContacts');
+    } catch (e) {
+      console.warn('Contacts unavailable:', e.message);
+      contactsLoad.failed = e.message;
+    }
+    return list;
+  })();
+  return contactsLoad;
+}
+
+async function contactMatches(q) {
+  const seen = new Map();
+  const add = (c) => { if (c.addr && c.addr !== state.me.toLowerCase() && !seen.has(c.addr)) seen.set(c.addr, c); };
+  (await loadContacts()).forEach(add);
+  for (const t of [...state.threads.values(), ...state.suggestCache.values()]) (t.senders || []).forEach((p) => add({ name: p.name, addr: p.addr }));
+  const lq = q.toLowerCase();
+  const score = (c) => {
+    const words = c.name.toLowerCase().split(/\s+/);
+    if (c.addr.startsWith(lq) || words.some((w) => w.startsWith(lq)) || c.name.toLowerCase().startsWith(lq)) return c.saved ? 0 : 1;
+    if (c.addr.includes(lq) || c.name.toLowerCase().includes(lq)) return 2;
+    return 9;
+  };
+  return [...seen.values()].map((c) => [score(c), c]).filter(([n]) => n < 9)
+    .sort((a, b) => a[0] - b[0] || a[1].name.localeCompare(b[1].name)).slice(0, 8).map(([, c]) => c);
+}
+
+// Suggest contacts for the address being typed (after the last comma); picking one adds "Name <addr>, ".
+function attachContactSuggest(input) {
+  const wrap = el('div', { class: 'to-wrap' });
+  input.replaceWith(wrap);
+  const panel = el('div', { class: 'suggest', role: 'listbox', hidden: '' });
+  wrap.append(input, panel);
+  let items = [], active = 0, seq = 0;
+  const close = () => { panel.hidden = true; items = []; };
+  const current = () => { const parts = input.value.split(','); return parts[parts.length - 1].trim(); };
+  const pick = (c) => {
+    const parts = input.value.split(',').slice(0, -1).map((x) => x.trim()).filter(Boolean);
+    parts.push(c.name ? `${c.name} <${c.addr}>` : c.addr);
+    input.value = parts.join(', ') + ', ';
+    input.dispatchEvent(new Event('input'));
+    close(); input.focus();
+  };
+  input.addEventListener('input', async () => {
+    const q = current(), mine = ++seq;
+    if (q.length < 1) { close(); return; }
+    const found = await contactMatches(q);
+    if (mine !== seq) return;
+    items = found; active = 0;
+    if (!items.length) { close(); return; }
+    panel.replaceChildren(...items.map((c, i) => {
+      const r = el('div', { class: 'suggest-item' + (i === active ? ' active' : ''), role: 'option' }, [
+        el('span', { class: 'suggest-icon' }, icon('person')),
+        el('span', { class: 'suggest-text' }, [el('span', { class: 'suggest-label' }, c.name || c.addr), c.name ? el('span', { class: 'suggest-sub' }, c.addr) : null]),
+      ]);
+      r.addEventListener('mousedown', (e) => { e.preventDefault(); pick(c); });
+      return r;
+    }));
+    panel.hidden = false;
+  });
+  input.addEventListener('keydown', (e) => {
+    if (panel.hidden || !items.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      active = (active + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
+      [...panel.children].forEach((r, i) => r.classList.toggle('active', i === active));
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault(); pick(items[active]);
+    } else if (e.key === 'Escape') {
+      e.stopPropagation(); close();
+    }
+  });
+  input.addEventListener('blur', () => setTimeout(close, 120));
+  input.addEventListener('focus', () => loadContacts());       // start loading early
+}
+
 function openCompose(draft = null) {
   flushReplyDraft();
   state.openId = null;
   document.querySelectorAll('.card.open').forEach((c) => c.classList.remove('open'));
   let draftId = draft?.id || null, dirty = false;
   const changed = () => { dirty = true; };
-  const to = el('input', { placeholder: 'To', autocomplete: 'email' });
+  const to = el('input', { placeholder: 'To', autocomplete: 'off' });
   const subject = el('input', { placeholder: 'Subject' });
   for (const f of [to, subject]) f.addEventListener('input', changed);
+  const toBox = el('div', {}, to);                     // attachContactSuggest wraps the field in place
   const rich = richEditor('Message', changed);
   if (draft) {
     to.value = header(draft.message, 'to');
@@ -2367,10 +2470,11 @@ function openCompose(draft = null) {
   });
   const reader = $('#reader');
   reader.replaceChildren(readerHead(draft ? 'Draft' : 'New message'), el('div', { class: 'compose' }, [
-    to, subject, rich.editor, rich.chips, rich.emojiPop,
+    toBox, subject, rich.editor, rich.chips, rich.emojiPop,
     el('div', { class: 'reply-tools' }, [send, el('span', { class: 'sep' }), ...rich.formatTools]), rich.picker,
   ]));
   reader.hidden = false;
+  attachContactSuggest(to);
   state.replyDraft = me;
   (draft && to.value ? rich.editor : to).focus();
 }

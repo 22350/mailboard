@@ -399,3 +399,7 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 .no-matches { padding: 0 .4rem; }
 .did-you-mean { display: flex; flex-direction: column; align-items: flex-start; gap: .4rem; }
 .did-you-mean button { text-align: left; }
+
+/* To field: contact suggestions under it. */
+.to-wrap { position: relative; }
+.to-wrap .suggest { width: 100%; }
