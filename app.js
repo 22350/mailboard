@@ -1998,8 +1998,8 @@ function renderActions(box, id) {
   const t = state.threads.get(id);
   const current = t ? columnOf(t, cols) : -1;
   const color = t && colorOf(t);
-  const colorBtn = el('button', { class: 'color-btn', style: color ? `--swatch:${color.bg}` : null },
-    [icon('palette'), color ? color.name : 'Color']);
+  const colorBtn = el('button', { class: 'icon-btn color-btn', style: color ? `--swatch:${color.bg}` : null,
+    title: color ? `Color: ${color.name}` : 'Color', 'aria-label': color ? `Color: ${color.name}` : 'Color' }, icon('palette'));
   colorBtn.addEventListener('click', (e) => { e.stopPropagation(); openColorPicker(colorBtn, id); });
   const gmail = el('a', {
     href: `https://mail.google.com/mail/?authuser=${encodeURIComponent(state.me)}#all/${id}`,
