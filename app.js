@@ -443,11 +443,7 @@ async function bulkChange(action, arg) {
   const cols = columns();
   const boardLabels = cols.slice(1).map((c) => state.labelIds[c.name]);
   const fromSpamTrash = state.selectAll?.scope.spamTrash || state.searchArgs?.folder?.spamTrash;
-  if (action === 'archive') {
-    const doneIdx = cols.findIndex((c) => c.archive);
-    if (doneIdx >= 0) return bulkChange('move', doneIdx);
-    return { add: [], remove: ['INBOX', ...boardLabels], verb: 'Archived' };
-  }
+  if (action === 'archive') return { add: [], remove: ['INBOX', ...boardLabels], verb: 'Archived' };
   if (action === 'move') {
     const target = cols[arg];
     const tl = state.labelIds[target.name];
@@ -981,12 +977,10 @@ async function moveWithUndo(id, colIdx) {
   }
 }
 
-// Archive = drop into the archiving column (Done) when there is one,
-// otherwise take the thread out of the Inbox and off the board.
+// Archive = take the thread out of the Inbox and off the board (no column label), like Gmail's
+// Archive. Dragging it to an archiving last column is the way to archive it into that column.
 async function archiveThread(id) {
   const cols = columns();
-  const doneIdx = cols.findIndex((c) => c.archive);
-  if (doneIdx >= 0) return moveWithUndo(id, doneIdx);
   const t = state.threads.get(id);
   if (!t) return;
   const remove = ['INBOX', ...cols.slice(1).map((c) => state.labelIds[c.name])].filter((l) => t.labels.has(l));
