@@ -36,7 +36,8 @@ const settings = {
   inboxName: store.get('inboxName', 'Inbox'),
   columns: store.get('columns', ['To Do', 'Waiting', 'Done']),
   colWidth: store.get('colWidth', null),   // px shared by all columns; null = automatic
-  readerWidth: store.get('readerWidth', null),   // px for the opened-email panel; null = normal (760)
+  readerWidth: store.get('readerWidth', null),
+  barColor: store.get('barColor', null),   // title bar color (#rrggbb); null = default olive   // px for the opened-email panel; null = normal (760)
 };
 
 function columns() {
@@ -2181,7 +2182,24 @@ function columnRow(name, orig, isInbox) {
   return row;
 }
 
+const DEFAULT_BAR = '#373a2b';
+
+// Color the top bar and column headers (and the window's title bar on Windows/Mac via theme-color),
+// with light or dark text so it stays readable.
+function applyBarColor(hex) {
+  const c = /^#[0-9a-f]{6}$/i.test(hex || '') ? hex : DEFAULT_BAR;
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16) / 255)
+    .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  const light = 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.35;     // bright color: dark text
+  const root = document.documentElement.style;
+  root.setProperty('--bar-bg', c);
+  root.setProperty('--bar-text', light ? '#1b1d21' : '#eef0e4');
+  root.setProperty('--bar-muted', light ? '#3f444c' : '#c3c7b2');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', c);
+}
+
 function openSettings() {
+  $('#set-barcolor').value = settings.barColor || DEFAULT_BAR;
   $('#set-columns').replaceChildren(
     columnRow(settings.inboxName, null, true),
     ...settings.columns.map((n) => columnRow(n, n)),
@@ -2323,8 +2341,14 @@ function wireUi() {
       $('#set-error').textContent = result.error;
       return;
     }
+    settings.barColor = $('#set-barcolor').value.toLowerCase() === DEFAULT_BAR ? null : $('#set-barcolor').value;
+    store.set('barColor', settings.barColor);
     applySettings(result);
   });
+  // The color previews live; Cancel (or Esc) puts the saved one back.
+  $('#set-barcolor').addEventListener('input', () => applyBarColor($('#set-barcolor').value));
+  $('#set-barcolor-reset').addEventListener('click', () => { $('#set-barcolor').value = DEFAULT_BAR; applyBarColor(DEFAULT_BAR); });
+  $('#settings').addEventListener('close', () => applyBarColor(settings.barColor));
   // Enter in a column name would otherwise trigger the form's first button (Cancel).
   $('#set-columns').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
   $('#set-add').addEventListener('click', () => {
@@ -2407,6 +2431,7 @@ async function boot() {
   watchForUpdates();
   if (!settings.clientId) { show('setup'); return; }
   try { await waitForGis(); } catch (e) { toast(e.message); return; }
+  applyBarColor(settings.barColor);
   initAuth();
   if (restoreToken()) start(); else show('signin');
 }

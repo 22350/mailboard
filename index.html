@@ -9,9 +9,9 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="style.css?v=20261101141559">
+<link rel="stylesheet" href="style.css?v=20261101141912">
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="app.js?v=20261101141559" defer></script>
+<script src="app.js?v=20261101141912" defer></script>
 </head>
 <body>
 <header class="bar">
@@ -64,6 +64,10 @@
     <div class="field">
       <span>Rules</span>
       <button type="button" id="set-rules">Open Gmail rules (filters)</button>
+    </div>
+    <div class="field">
+      <span>Title bar color</span>
+      <div class="color-row"><input type="color" id="set-barcolor" aria-label="Title bar color"><button type="button" id="set-barcolor-reset">Default</button></div>
     </div>
     <label>Google OAuth Client ID
       <input id="set-client" autocomplete="off">

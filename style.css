@@ -34,7 +34,6 @@ input, textarea {
 a { color: var(--accent); }
 
 .bar {
-  --bar-bg: #373a2b; --bar-text: #eef0e4; --bar-muted: #c3c7b2;
   display: flex; align-items: center; gap: .6rem; padding: .6rem 1rem;
   background: var(--bar-bg); color: var(--bar-text);
 }
@@ -127,9 +126,9 @@ a { color: var(--accent); }
 }
 .column.drop { background: var(--drop); border-color: var(--accent); }
 .column h2 { font-size: 1rem; margin: 0; padding: .8rem 1rem; display: flex; gap: .5rem; align-items: center; }
-.column h2 { background: #373a2b; color: #eef0e4; border-radius: 10px 10px 0 0; margin-bottom: .6rem; }
-.column .count { margin-left: auto; color: #c3c7b2; font-weight: normal; }
-.column h2 .icon-btn { width: 30px; min-height: 30px; font-size: .95rem; color: #eef0e4; opacity: .65; }
+.column h2 { background: var(--bar-bg); color: var(--bar-text); border-radius: 10px 10px 0 0; margin-bottom: .6rem; }
+.column .count { margin-left: auto; color: var(--bar-muted); font-weight: normal; }
+.column h2 .icon-btn { width: 30px; min-height: 30px; font-size: .95rem; color: var(--bar-text); opacity: .65; }
 .column h2 .icon-btn:hover:not(:disabled) { opacity: 1; background: rgba(255,255,255,.14); }
 .column h2 .icon-btn.on { opacity: 1; color: #9fbf5a; }
 .column h2 .pick { accent-color: #9fbf5a; }
@@ -348,3 +347,8 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 .addr-item .copy-addr:hover { background: #fbcaca; }
 .addr-item:hover .copy-addr, .addr-item:focus-within .copy-addr { display: inline-block; }
 .addr-item:hover { color: var(--text); }
+
+/* Title bar color (Settings): top bar and column headers. Text color is set to match (light or dark). */
+:root { --bar-bg: #373a2b; --bar-text: #eef0e4; --bar-muted: #c3c7b2; }
+.color-row { display: flex; align-items: center; gap: .6rem; }
+.color-row input[type="color"] { width: 64px; height: 40px; padding: 2px 4px; cursor: pointer; }
