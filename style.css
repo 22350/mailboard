@@ -394,3 +394,8 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 .search-ghost .typed { color: transparent; }
 .search-ghost .rest { color: var(--bar-muted); }
 .search-ghost .tab-hint { margin-left: .5rem; font: 600 .68rem/1 ui-monospace, monospace; padding: .15rem .35rem; border: 1px solid var(--bar-muted); border-radius: 4px; color: var(--bar-muted); }
+
+/* Empty search: "Did you mean" buttons (Gmail only matches whole words). */
+.no-matches { padding: 0 .4rem; }
+.did-you-mean { display: flex; flex-direction: column; align-items: flex-start; gap: .4rem; }
+.did-you-mean button { text-align: left; }

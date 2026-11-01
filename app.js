@@ -1619,6 +1619,39 @@ function renderAddColumn() {
   return tile;
 }
 
+// Gmail only matches whole words ("jace" won't find "Jacek"), so an empty search offers the names and
+// words from known emails that start with what was typed, one click away.
+function noMatches(q) {
+  const last = (q.trim().split(/\s+/).pop() || '').toLowerCase();
+  const box = el('div', { class: 'no-matches' }, [el('p', { class: 'hint' }, 'No matches.')]);
+  if (last.length < 2 || /:/.test(last)) return box;
+  const pool = [...state.threads.values(), ...state.suggestCache.values()];
+  const people = new Map(), words = new Map();
+  for (const t of pool) {
+    for (const p of t.senders || []) {
+      if (p.addr === state.me.toLowerCase()) continue;
+      if ([p.name, ...p.name.split(/\s+/), p.addr].some((x) => x.toLowerCase().startsWith(last))) people.set(p.addr, p);
+    }
+    for (const w of `${t.subject} ${t.people}`.split(/[^\p{L}\p{N}'-]+/u)) {
+      const lw = w.toLowerCase();
+      if (lw.length > last.length && lw.startsWith(last)) words.set(lw, (words.get(lw) || 0) + 1);
+    }
+  }
+  const prefix = q.trim().slice(0, q.trim().length - last.length);
+  const tries = [
+    ...[...people.values()].slice(0, 4).map((p) => [`${p.name} (${p.addr})`, `${prefix}from:${p.addr}`.trim()]),
+    ...[...words].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([w]) => [w, `${prefix}${w}`]),
+  ];
+  if (!tries.length) return box;
+  box.append(el('p', { class: 'hint' }, 'Gmail only finds whole words. Did you mean:'),
+    el('div', { class: 'did-you-mean' }, tries.map(([label, query]) => {
+      const b = el('button', { type: 'button' }, label);
+      b.addEventListener('click', () => { $('#search').value = query; runSearch(query); });
+      return b;
+    })));
+  return box;
+}
+
 function renderSearchColumn() {
   const { q, title, more } = state.search;
   const close = el('button', { class: 'icon-btn', title: 'Close', 'aria-label': 'Close' }, '✕');
@@ -1634,7 +1667,7 @@ function renderSearchColumn() {
     el('h2', {}, [columnCheckbox(-1), el('span', { class: 'q' }, title || `“${q}”`), el('span', { class: 'count' }, ids.length + (more ? '+' : '')), sortBtn, close]),
     el('div', { class: 'cards' }, ids.length
       ? ids.map((id) => renderCard(state.threads.get(id), -1))
-      : el('p', { class: 'hint' }, title ? 'Nothing here.' : 'No matches.')),
+      : title ? el('p', { class: 'hint' }, 'Nothing here.') : noMatches(q)),
   ]);
   node.append(...resizeHandles(node));
   return node;
@@ -2560,6 +2593,7 @@ function onKey(e) {
 // Search suggestions, like Gmail's: with the box empty, recent searches and quick filters (Has attachment,
 // Last 7 days, From me); while typing, a grey completion from recent searches (Tab accepts), matching
 // emails (loaded ones at once, then Gmail's own search), and "All search results" (Enter).
+state.suggestCache = new Map();
 const QUICK_FILTERS = [['Has attachment', 'has:attachment'], ['Last 7 days', 'newer_than:7d'], ['From me', 'from:me']];
 
 function rememberSearch(q) {
@@ -2574,7 +2608,7 @@ function setupSearchSuggest() {
   const panel = el('div', { id: 'suggest', class: 'suggest', role: 'listbox', hidden: '' });
   const ghost = el('div', { class: 'search-ghost', 'aria-hidden': 'true' });
   form.append(panel, ghost);
-  const cache = new Map();                    // id -> summary for emails found by Gmail search
+  const cache = state.suggestCache;           // id -> summary for emails found by Gmail search
   let rows = [], active = -1, seq = 0, timer, completion = '';
 
   const close = () => { panel.hidden = true; rows = []; active = -1; setGhost(''); };
