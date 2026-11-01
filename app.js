@@ -214,9 +214,10 @@ function summarize(t) {
   const msgs = t.messages || [];
   const last = msgs[msgs.length - 1] || {};
   const labels = new Set(msgs.flatMap((m) => m.labelIds || []));
-  const people = [];
+  const people = [], senders = [];
   for (const m of msgs) {
     const from = header(m, 'from');
+    if (from && !senders.some((x) => x.addr === addrOf(from))) senders.push({ name: displayName(from), addr: addrOf(from) });
     const name = addrOf(from) === state.me.toLowerCase() ? 'me' : displayName(from);
     if (!people.includes(name)) people.push(name);
   }
@@ -225,6 +226,7 @@ function summarize(t) {
     historyId: t.historyId,
     subject: header(msgs[0] || {}, 'subject') || '(no subject)',
     people: people.join(', '),
+    senders,
     snippet: decodeEntities(last.snippet || ''),
     date: Number(last.internalDate || 0),
     count: msgs.length,
@@ -424,6 +426,7 @@ async function fetchSummaries(listed) {
 // Show a search, or a sidebar folder, as the extra column left of the board.
 async function runSearch(q, folder) {
   q = (q || '').trim();
+  if (q && !folder) rememberSearch(q);
   if (!q && !folder) { clearSearch(); return; }
   const seq = ++state.searchSeq;
   state.folder = folder ? folder.name : null;
@@ -1461,6 +1464,8 @@ function el(tag, attrs = {}, children = []) {
 const ICONS = {
   sort: 'M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z',
   widen: 'M4 12l4-4v3h8V8l4 4-4 4v-3H8v3z',
+  mail: 'M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z',
+  search: 'M15.5 14h-.79l-.28-.27A6.47 6.47 0 0016 9.5 6.5 6.5 0 109.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z',
   narrow: 'M10 12L6 8v3H2v2h4v3zm4 0l4-4v3h4v2h-4v3z',
   archive: 'M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z',
   trash: 'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z',
@@ -2552,7 +2557,129 @@ function onKey(e) {
   }
 }
 
+// Search suggestions, like Gmail's: with the box empty, recent searches and quick filters (Has attachment,
+// Last 7 days, From me); while typing, a grey completion from recent searches (Tab accepts), matching
+// emails (loaded ones at once, then Gmail's own search), and "All search results" (Enter).
+const QUICK_FILTERS = [['Has attachment', 'has:attachment'], ['Last 7 days', 'newer_than:7d'], ['From me', 'from:me']];
+
+function rememberSearch(q) {
+  q = (q || '').trim();
+  if (!q) return;
+  store.set('recentSearches', [q, ...store.get('recentSearches', []).filter((x) => x.toLowerCase() !== q.toLowerCase())].slice(0, 12));
+}
+
+function setupSearchSuggest() {
+  const input = $('#search');
+  const form = $('#search-form');
+  const panel = el('div', { id: 'suggest', class: 'suggest', role: 'listbox', hidden: '' });
+  const ghost = el('div', { class: 'search-ghost', 'aria-hidden': 'true' });
+  form.append(panel, ghost);
+  const cache = new Map();                    // id -> summary for emails found by Gmail search
+  let rows = [], active = -1, seq = 0, timer, completion = '';
+
+  const close = () => { panel.hidden = true; rows = []; active = -1; setGhost(''); };
+  const go = (q) => { close(); input.value = q; runSearch(q); };
+  const setGhost = (rest) => {                // grey completion drawn right after what was typed
+    completion = rest;
+    if (!rest) { ghost.replaceChildren(); return; }
+    const cs = getComputedStyle(input), r = input.getBoundingClientRect(), f = form.getBoundingClientRect();
+    Object.assign(ghost.style, { left: r.left - f.left + 'px', top: r.top - f.top + 'px', width: r.width + 'px', height: r.height + 'px',
+      font: cs.font, padding: cs.padding, borderWidth: cs.borderWidth, letterSpacing: cs.letterSpacing });
+    ghost.replaceChildren(el('span', { class: 'typed' }, input.value), el('span', { class: 'rest' }, rest),
+      el('kbd', { class: 'tab-hint' }, 'tab'));
+  };
+  const highlight = (text, q) => {            // bold the typed words, like Gmail
+    const i = q ? text.toLowerCase().indexOf(q.toLowerCase()) : -1;
+    return i < 0 ? text : [text.slice(0, i), el('b', {}, text.slice(i, i + q.length)), text.slice(i + q.length)];
+  };
+  const row = (iconName, main, extra, run) => {
+    const r = el('div', { class: 'suggest-item', role: 'option' }, [el('span', { class: 'suggest-icon' }, icon(iconName)), ...[].concat(main), extra]);
+    r.addEventListener('mousedown', (e) => { e.preventDefault(); run(); });   // before the box loses focus
+    r.run = run;
+    rows.push(r);
+    return r;
+  };
+  const draw = (parts) => {
+    rows = []; active = -1;
+    panel.replaceChildren(...parts());
+    panel.hidden = false;
+  };
+  const chips = () => el('div', { class: 'suggest-chips' }, QUICK_FILTERS.map(([label, op]) => {
+    const b = el('button', { type: 'button', class: 'chip' }, label);
+    b.addEventListener('mousedown', (e) => { e.preventDefault(); go(`${input.value.trim()} ${op}`.trim()); });
+    return b;
+  }));
+  const recents = () => store.get('recentSearches', []);
+  const emailRow = (t, q) => row('mail',
+    el('span', { class: 'suggest-text' }, [el('span', { class: 'suggest-label' }, highlight(t.subject, q)),
+      el('span', { class: 'suggest-sub' }, highlight(t.people, q))]),
+    el('span', { class: 'suggest-meta' }, [t.attachments ? icon('clip') : null, dateLabel(t.date)]),
+    () => { close(); openThread(t.id); });
+  const matches = (t, q) => [t.subject, t.people, t.snippet].some((x) => (x || '').toLowerCase().includes(q));
+  const localEmails = (q) => [...state.threads.values(), ...cache.values()].filter((t) => matches(t, q))
+    .sort((a, b) => b.date - a.date).filter((t, i, a) => a.findIndex((x) => x.id === t.id) === i).slice(0, 5);
+
+  const showEmpty = () => draw(() => [chips(), ...recents().slice(0, 6).map((r) =>
+    row('clock', el('span', { class: 'suggest-label' }, r), null, () => go(r)))]);
+  const showTyping = (q, emails) => {
+    const lq = q.toLowerCase();
+    const recentHits = recents().filter((r) => r.toLowerCase().startsWith(lq) && r.toLowerCase() !== lq).slice(0, 3);
+    setGhost(recentHits[0] ? recentHits[0].slice(q.length) : '');
+    draw(() => [chips(),
+      ...recentHits.map((r) => row('clock', el('span', { class: 'suggest-label' }, [el('b', {}, r.slice(0, q.length)), r.slice(q.length)]), null, () => go(r))),
+      ...(emails.length ? [el('div', { class: 'suggest-sep' })] : []), ...emails.map((t) => emailRow(t, q)),
+      el('div', { class: 'suggest-sep' }),
+      row('search', el('span', { class: 'suggest-label' }, `All search results for “${q}”`), el('span', { class: 'suggest-meta' }, 'Press ENTER'), () => go(q))]);
+  };
+
+  input.addEventListener('focus', () => { if (!input.value.trim()) showEmpty(); });
+  input.addEventListener('input', () => {
+    const q = input.value.trim();
+    clearTimeout(timer);
+    if (!q) { setGhost(''); showEmpty(); return; }
+    const mine = ++seq;
+    showTyping(q, localEmails(q.toLowerCase()));
+    timer = setTimeout(async () => {                         // then ask Gmail, once typing pauses
+      try {
+        const r = await api(`/threads?q=${encodeURIComponent(q)}&maxResults=5`);
+        if (mine !== seq) return;
+        const found = [];
+        await mapLimit(r.threads || [], 3, async (x) => {
+          const t = state.threads.get(x.id) || cache.get(x.id) || summarize(await api(metadataPath(x.id)));
+          cache.set(t.id, t); found.push(t);
+        });
+        if (mine !== seq || input.value.trim() !== q) return;
+        const order = (r.threads || []).map((x) => x.id);
+        found.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+        showTyping(q, [...found, ...localEmails(q.toLowerCase())].filter((t, i, a) => a.findIndex((x) => x.id === t.id) === i).slice(0, 5));
+      } catch (e) { if (e instanceof AuthError) close(); }
+    }, 300);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab' && completion) {                     // accept the grey completion
+      e.preventDefault();
+      input.value += completion;
+      input.dispatchEvent(new Event('input'));
+      return;
+    }
+    if (panel.hidden) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const n = rows.length;
+      active = e.key === 'ArrowDown' ? (active + 1 >= n ? -1 : active + 1) : (active - 1 < -1 ? n - 1 : active - 1);
+      rows.forEach((r, i) => r.classList.toggle('active', i === active));
+    } else if (e.key === 'Enter' && active >= 0) {
+      e.preventDefault(); rows[active].run();
+    } else if (e.key === 'Escape') {
+      e.preventDefault(); e.stopImmediatePropagation(); close();
+    }
+  });
+  input.addEventListener('blur', () => setTimeout(close, 120));
+  form.addEventListener('submit', close);
+}
+
 function wireUi() {
+  setupSearchSuggest();
   $('#btn-signin').addEventListener('click', signIn);
   $('#banner-btn').addEventListener('click', signIn);
   $('#btn-refresh').addEventListener('click', loadBoard);

@@ -365,3 +365,32 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 .snooze-pick h2 { margin: 0 0 .8rem; font-size: 1.1rem; }
 .snooze-pick .row { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .8rem; }
 .snooze-pick::backdrop { background: rgba(0,0,0,.4); }
+
+/* Search suggestions under the search box, like Gmail's. */
+.search-box { position: relative; }
+.suggest {
+  position: absolute; top: calc(100% + 4px); left: 0; width: max(100%, min(680px, 92vw)); z-index: 40; max-height: 75vh; overflow-y: auto;
+  background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.32); padding: .35rem 0;
+}
+.suggest[hidden] { display: none; }
+.suggest-chips { display: flex; gap: .5rem; flex-wrap: wrap; padding: .5rem .9rem .6rem; border-bottom: 1px solid var(--border); margin-bottom: .25rem; }
+.suggest-chips .chip { border-radius: 8px; padding: .3rem .8rem; font-size: .9rem; background: transparent; }
+.suggest-chips .chip:hover { background: var(--col); }
+.suggest-sep { border-top: 1px solid var(--border); margin: .3rem 0; }
+.suggest-item { display: flex; align-items: center; gap: .9rem; padding: .5rem .9rem; cursor: pointer; }
+.suggest-item:hover, .suggest-item.active { background: var(--col); }
+.suggest-icon { width: 20px; flex: none; display: grid; place-items: center; }
+.suggest-icon svg { width: 18px; height: 18px; fill: var(--muted); }
+.suggest-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.suggest-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.suggest-item > .suggest-label { flex: 1; }
+.suggest-sub { font-size: .82rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.suggest-meta { margin-left: auto; flex: none; display: flex; align-items: center; gap: .4rem; font-size: .82rem; color: var(--muted); }
+.suggest-meta svg { width: 15px; height: 15px; fill: currentColor; }
+/* grey completion after the typed text (Tab accepts) */
+.search-ghost { position: absolute; pointer-events: none; border-style: solid; border-color: transparent; box-sizing: border-box;
+  white-space: pre; overflow: hidden; display: flex; align-items: center; }
+.search-ghost .typed { color: transparent; }
+.search-ghost .rest { color: var(--bar-muted); }
+.search-ghost .tab-hint { margin-left: .5rem; font: 600 .68rem/1 ui-monospace, monospace; padding: .15rem .35rem; border: 1px solid var(--bar-muted); border-radius: 4px; color: var(--bar-muted); }
