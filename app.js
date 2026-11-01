@@ -270,14 +270,18 @@ async function snoozeThread(id, date) {
       state.snoozeFlagId = flag.id;
     }
     const old = (state.snoozeLabels || []).filter((l) => l.id !== lab.id && t.labels.has(l.id)).map((l) => l.id);
-    const wasInbox = t.labels.has('INBOX');
-    await api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: [lab.id, state.snoozeFlagId], removeLabelIds: ['INBOX', ...old] } });
-    t.labels.add(lab.id); t.labels.add(state.snoozeFlagId); t.labels.delete('INBOX'); old.forEach((l) => t.labels.delete(l));
+    const wasInbox = t.labels.has('INBOX'), wasUnread = t.labels.has('UNREAD');
+    // Snoozing also marks it unread (as Paul does before snoozing in Gmail), so it stands out when it's back.
+    await api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: [lab.id, state.snoozeFlagId, 'UNREAD'], removeLabelIds: ['INBOX', ...old] } });
+    t.labels.add(lab.id); t.labels.add(state.snoozeFlagId); t.labels.add('UNREAD'); t.unread = true;
+    t.labels.delete('INBOX'); old.forEach((l) => t.labels.delete(l));
     if (state.openId === id) closeReader();
     assign(columns()); render();
     toast(`Snoozed until ${whenLabel(date)}`, { label: 'Undo', run: async () => {
-      await api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: wasInbox ? ['INBOX'] : [], removeLabelIds: [lab.id, state.snoozeFlagId] } });
+      await api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: wasInbox ? ['INBOX'] : [],
+        removeLabelIds: [lab.id, state.snoozeFlagId, ...(wasUnread ? [] : ['UNREAD'])] } });
       t.labels.delete(lab.id); t.labels.delete(state.snoozeFlagId); if (wasInbox) t.labels.add('INBOX');
+      if (!wasUnread) { t.labels.delete('UNREAD'); t.unread = false; }
       assign(columns()); render();
     } });
   } catch (e) {
