@@ -37,6 +37,7 @@ const settings = {
   columns: store.get('columns', ['To Do', 'Waiting', 'Done']),
   lastArchives: store.get('lastArchives', true),
   colWidth: store.get('colWidth', null),   // px shared by all columns; null = automatic
+  readerWidth: store.get('readerWidth', null),   // px for the opened-email panel; null = normal (760)
 };
 
 function columns() {
@@ -1233,6 +1234,8 @@ function el(tag, attrs = {}, children = []) {
 
 const ICONS = {
   sort: 'M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z',
+  widen: 'M4 12l4-4v3h8V8l4 4-4 4v-3H8v3z',
+  narrow: 'M10 12L6 8v3H2v2h4v3zm4 0l4-4v3h4v2h-4v3z',
   archive: 'M20.54 5.23l-1.39-1.68C18.88 3.21 18.47 3 18 3H6c-.47 0-.88.21-1.16.55L3.46 5.23C3.17 5.57 3 6.02 3 6.5V19c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V6.5c0-.48-.17-.93-.46-1.27zM12 17.5L6.5 12H10v-2h4v2h3.5L12 17.5zM5.12 5l.81-1h12l.94 1H5.12z',
   trash: 'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z',
   unread: 'M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z',
@@ -1728,10 +1731,61 @@ function renderReplyBox(last, threadId) {
   return el('div', { class: 'reply' }, [ta, el('div', { class: 'row' }, [el('label', { class: 'check' }, [all, 'Reply all']), send])]);
 }
 
+// The opened-email panel can be widened: drag its left edge, or the wider/narrower button in its
+// header. Double-click the edge for the normal width. Remembered per browser.
+const READER_NORMAL = 760, READER_MIN = 420;
+const readerMax = () => Math.max(READER_MIN, window.innerWidth - 40);
+const readerWide = () => settings.readerWidth && settings.readerWidth >= readerMax() - 10;
+
+function applyReaderWidth(w) {
+  if (w) document.body.style.setProperty('--reader-w', `${Math.min(w, readerMax())}px`);
+  else document.body.style.removeProperty('--reader-w');
+}
+
+function setReaderWidth(w) {
+  settings.readerWidth = w;
+  store.set('readerWidth', w);
+  applyReaderWidth(w);
+  document.querySelectorAll('.reader-widen').forEach((b) => b.replaceWith(widenButton()));
+}
+
+function widenButton() {
+  const wide = readerWide();
+  const b = iconButton(wide ? 'Make narrower' : 'Make wider', wide ? 'narrow' : 'widen', () => {
+    if (readerWide()) setReaderWidth(store.get('readerWidthBefore', null));
+    else { store.set('readerWidthBefore', settings.readerWidth); setReaderWidth(readerMax()); }
+  });
+  b.classList.add('reader-widen');
+  return b;
+}
+
+function setupReaderResize() {
+  const h = $('#reader-resize');
+  h.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    h.setPointerCapture(e.pointerId);
+    document.body.classList.add('reader-resizing');
+    const move = (ev) => {
+      settings.readerWidth = Math.round(Math.min(readerMax(), Math.max(READER_MIN, window.innerWidth - ev.clientX)));
+      applyReaderWidth(settings.readerWidth);
+    };
+    const up = () => {
+      h.removeEventListener('pointermove', move);
+      document.body.classList.remove('reader-resizing');
+      setReaderWidth(settings.readerWidth);
+    };
+    h.addEventListener('pointermove', move);
+    h.addEventListener('pointerup', up, { once: true });
+    h.addEventListener('pointercancel', up, { once: true });
+  });
+  h.addEventListener('dblclick', () => setReaderWidth(null));
+  window.addEventListener('resize', () => applyReaderWidth(settings.readerWidth));
+}
+
 function readerHead(title) {
   const close = el('button', { 'aria-label': 'Close' }, '✕');
   close.addEventListener('click', closeReader);
-  return el('div', { class: 'reader-head' }, [el('h2', {}, title), close]);
+  return el('div', { class: 'reader-head' }, [el('h2', {}, title), widenButton(), close]);
 }
 
 async function openThread(id) {
@@ -1990,6 +2044,8 @@ function wireUi() {
 
 async function start() {
   applyColumnWidth(settings.colWidth);
+  applyReaderWidth(settings.readerWidth);
+  setupReaderResize();
   show('board');
   if (!state.me) {
     try {
