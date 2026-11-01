@@ -1680,21 +1680,43 @@ function bodyFrame(m) {
     if (!doc) return;
     // Keys pressed inside the email body don't reach the app; pass Esc on so it still closes the email.
     doc.addEventListener('keydown', (e) => { if (e.key === 'Escape') onKey({ key: 'Escape', target: frame }); });
-    // Hovering an email link (mailto:) in the message shows a Copy button for that address.
+    // Hovering any email address in the message (an email link, or an address typed as plain text)
+    // shows a Copy button next to it.
     const btn = doc.createElement('button');
     btn.id = 'mb-copy'; btn.textContent = 'Copy'; btn.hidden = true;
     doc.body.append(btn);
-    let hideTimer;
-    doc.addEventListener('mouseover', (e) => {
-      const a = e.target.closest?.('a[href^="mailto:" i]');
-      if (e.target === btn) { clearTimeout(hideTimer); return; }
-      if (!a) { hideTimer = setTimeout(() => { btn.hidden = true; }, 400); return; }
+    const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+    let hideTimer, lastMove = 0;
+    const showAt = (rect, addr) => {
       clearTimeout(hideTimer);
-      const r = a.getBoundingClientRect();
-      btn.dataset.addr = decodeURIComponent(a.getAttribute('href').slice(7).split('?')[0]);
-      btn.style.left = (r.right + doc.defaultView.scrollX + 6) + 'px';
-      btn.style.top = (r.top + doc.defaultView.scrollY - 2) + 'px';
+      btn.dataset.addr = addr;
+      btn.style.left = (rect.right + doc.defaultView.scrollX + 6) + 'px';
+      btn.style.top = (rect.top + doc.defaultView.scrollY - 2) + 'px';
       btn.hidden = false;
+    };
+    const hideSoon = () => { clearTimeout(hideTimer); hideTimer = setTimeout(() => { btn.hidden = true; }, 500); };
+    const addressAt = (x, y) => {                         // the email address under the mouse, as {rect, addr}
+      const pos = doc.caretRangeFromPoint?.(x, y);
+      const node = pos?.startContainer;
+      if (!node || node.nodeType !== 3) return null;
+      for (const m of node.data.matchAll(EMAIL)) {
+        if (pos.startOffset < m.index || pos.startOffset > m.index + m[0].length) continue;
+        const r = doc.createRange();
+        r.setStart(node, m.index); r.setEnd(node, m.index + m[0].length);
+        const rect = r.getBoundingClientRect();
+        if (x < rect.left - 2 || x > rect.right + 2 || y < rect.top - 2 || y > rect.bottom + 2) return null;
+        return { rect, addr: m[0].replace(/\.$/, '') };
+      }
+      return null;
+    };
+    doc.addEventListener('mousemove', (e) => {
+      if (e.timeStamp - lastMove < 40) return;          // at most ~25 checks a second
+      lastMove = e.timeStamp;
+      if (e.target === btn) { clearTimeout(hideTimer); return; }
+      const a = e.target.closest?.('a[href^="mailto:" i]');
+      if (a) return showAt(a.getBoundingClientRect(), decodeURIComponent(a.getAttribute('href').slice(7).split('?')[0]));
+      const hit = addressAt(e.clientX, e.clientY);
+      if (hit) showAt(hit.rect, hit.addr); else hideSoon();
     });
     btn.addEventListener('click', (e) => { e.preventDefault(); copyAddress(btn.dataset.addr); btn.hidden = true; });
     const fit = () => { frame.style.height = doc.documentElement.scrollHeight + 'px'; };
