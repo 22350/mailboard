@@ -2648,10 +2648,20 @@ async function applySettings({ inboxName, cols, clientId }) {
   loadBoard();
 }
 
+function disarmDelete() {
+  if (!state.armedDelete) return;
+  clearTimeout(state.armedDelete.timer);
+  const card = document.querySelector(`.card[data-id="${state.armedDelete.id}"]`);
+  card?.classList.remove('delete-armed');
+  card?.querySelector('.delete-hint')?.remove();
+  state.armedDelete = null;
+}
+
 function onKey(e) {
   // Typing in a field ignores shortcuts, except Esc inside the email window: it closes it (drafts are kept).
   const escInReader = e.key === 'Escape' && e.target.closest?.('#reader');
   if (e.target.closest?.('input, textarea, dialog') && !escInReader) return;
+  if (e.key === 'Escape' && state.armedDelete) { disarmDelete(); return; }
   if (e.key === 'Escape' && $('#color-pop')) { closeColorPicker(); return; }
   if (e.key === 'Escape' && $('#menu')) { closeMenu(); return; }
   if (e.key === 'Escape' && !$('#reader').hidden) { closeReader(); return; }
@@ -2663,7 +2673,20 @@ function onKey(e) {
     // the previous delete moved the next card up under the mouse), else the focused card.
     const under = state.pointer && document.elementFromPoint(state.pointer.x, state.pointer.y)?.closest('.card');
     const target = under || document.activeElement?.closest?.('.card');
-    if (target) { e.preventDefault(); trashThread(target.dataset.id); return; }
+    if (target) {
+      e.preventDefault();
+      // Two presses on purpose: the first marks the card, a second within 3 s moves it to Trash.
+      const id = target.dataset.id;
+      if (state.armedDelete?.id === id && Date.now() - state.armedDelete.at < 3000) {
+        disarmDelete(); trashThread(id);
+      } else {
+        disarmDelete();
+        target.classList.add('delete-armed');
+        target.append(el('div', { class: 'delete-hint' }, 'Press Delete again to trash'));
+        state.armedDelete = { id, at: Date.now(), timer: setTimeout(disarmDelete, 3000) };
+      }
+      return;
+    }
   }
   const card = document.activeElement?.closest?.('.card');
   if (!card || e.ctrlKey || e.metaKey || e.altKey) return;

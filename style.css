@@ -403,3 +403,7 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 /* To field: contact suggestions under it. */
 .to-wrap { position: relative; }
 .to-wrap .suggest { width: 100%; }
+
+/* Delete key: the first press marks the card; a second press trashes it. */
+.card.delete-armed { outline: 2px solid #e05555; outline-offset: -2px; background: rgba(224, 85, 85, .12); }
+.card .delete-hint { margin-top: .35rem; font-size: .8rem; font-weight: 600; color: #e05555; }
