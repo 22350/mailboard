@@ -1788,10 +1788,64 @@ async function flushReplyDraft() {
   if (d) await d.save().catch((e) => { if (!(e instanceof AuthError)) toast('Could not save draft: ' + e.message); });
 }
 
+// Formatted editor with attachments, shared by the reply box and the compose window: the editor, its
+// attachment chips, emoji pop-up and the formatting buttons (B I U, lists, attach, link, emoji).
+function richEditor(placeholder, changed) {
+  const files = [];
+  const editor = el('div', { class: 'reply-editor', contenteditable: 'true', role: 'textbox', 'aria-multiline': 'true',
+    'data-placeholder': placeholder });
+  editor.addEventListener('input', changed);
+  const chips = el('div', { class: 'reply-files' });
+  const renderChips = () => chips.replaceChildren(...files.map((f, i) => {
+    const x = el('button', { type: 'button', title: 'Remove', 'aria-label': `Remove ${f.name}` }, '✕');
+    x.addEventListener('click', () => { files.splice(i, 1); changed(); renderChips(); });
+    return el('span', { class: 'chip' }, [`📎 ${f.name} (${Math.max(1, Math.round(f.size / 1024))} KB)`, x]);
+  }));
+  const picker = el('input', { type: 'file', multiple: '', hidden: '' });
+  picker.addEventListener('change', () => { files.push(...picker.files); picker.value = ''; changed(); renderChips(); });
+
+  const fmt = (cmd, arg) => { editor.focus(); document.execCommand(cmd, false, arg); };
+  const tool = (label, text, run, cls = '') => {
+    const b = el('button', { type: 'button', class: 'tool ' + cls, title: label, 'aria-label': label }, text);
+    b.addEventListener('mousedown', (e) => e.preventDefault());     // keep the text selection in the editor
+    b.addEventListener('click', run);
+    return b;
+  };
+  const emojiPop = el('div', { class: 'emoji-pop', hidden: '' },
+    EMOJI.map((em) => tool(em, em, () => { fmt('insertText', em); emojiPop.hidden = true; })));
+  const linkTool = () => {
+    const url = prompt('Link address (https://…)');
+    if (!url) return;
+    const href = /^[a-z]+:/i.test(url) ? url : 'https://' + url;
+    if (window.getSelection()?.toString()) fmt('createLink', href); else fmt('insertHTML', `<a href="${escapeHtml(href)}">${escapeHtml(url)}</a>`);
+  };
+  const formatTools = [
+    tool('Bold', 'B', () => fmt('bold'), 'b'), tool('Italic', 'I', () => fmt('italic'), 'i'),
+    tool('Underline', 'U', () => fmt('underline'), 'u'),
+    tool('Bulleted list', '•', () => fmt('insertUnorderedList')), tool('Numbered list', '1.', () => fmt('insertOrderedList')),
+    el('span', { class: 'sep' }),
+    tool('Attach files', '📎', () => picker.click()), tool('Insert link', '🔗', linkTool),
+    tool('Emoji', '😊', () => { emojiPop.hidden = !emojiPop.hidden; }),
+  ];
+  return {
+    editor, chips, emojiPop, picker, files, formatTools,
+    isEmpty: () => !editor.innerText.trim() && !files.length,
+    content: () => ({ text: editor.innerText, html: editor.innerHTML, files }),
+    loadDraft(message) {                            // pick up where Paul left off: text, formatting, attachments
+      const html = findPart(message.payload, 'text/html'), text = findPart(message.payload, 'text/plain');
+      editor.innerHTML = html ? cleanHtml(decodePart(html)) : escapeHtml(text ? decodePart(text) : '').replace(/\n/g, '<br>');
+      Promise.all(attachmentsOf(message.payload).map(async (p) => {
+        const r = await api(`/messages/${message.id}/attachments/${p.body.attachmentId}`);
+        return new File([b64urlBytes(r.data)], p.filename, { type: p.mimeType });
+      })).then((got) => { files.push(...got); renderChips(); }).catch(() => toast('Could not load the draft\'s attachments'));
+    },
+  };
+}
+
 function renderReplyBox(last, threadId, draft = null) {
   let replyAll = true;
-  const files = [];
   let draftId = draft?.id || null, dirty = false;
+  const rich = richEditor('Write your reply…', () => { dirty = true; });
   const who = el('div', { class: 'reply-who' });
   const allBtn = el('button', { type: 'button' }, 'Reply all');
   const oneBtn = el('button', { type: 'button' }, 'Reply only');
@@ -1805,46 +1859,16 @@ function renderReplyBox(last, threadId, draft = null) {
   allBtn.addEventListener('click', () => { setMode(true); dirty = true; });
   oneBtn.addEventListener('click', () => { setMode(false); dirty = true; });
 
-  const editor = el('div', { class: 'reply-editor', contenteditable: 'true', role: 'textbox', 'aria-multiline': 'true',
-    'data-placeholder': 'Write your reply…' });
-  editor.addEventListener('input', () => { dirty = true; });
-  const chips = el('div', { class: 'reply-files' });
-  const renderChips = () => chips.replaceChildren(...files.map((f, i) => {
-    const x = el('button', { type: 'button', title: 'Remove', 'aria-label': `Remove ${f.name}` }, '✕');
-    x.addEventListener('click', () => { files.splice(i, 1); dirty = true; renderChips(); });
-    return el('span', { class: 'chip' }, [`📎 ${f.name} (${Math.max(1, Math.round(f.size / 1024))} KB)`, x]);
-  }));
-  const picker = el('input', { type: 'file', multiple: '', hidden: '' });
-  picker.addEventListener('change', () => { files.push(...picker.files); picker.value = ''; dirty = true; renderChips(); });
-
-  const fmt = (cmd, arg) => { editor.focus(); document.execCommand(cmd, false, arg); };
-  const tool = (label, text, run, cls = '') => {
-    const b = el('button', { type: 'button', class: 'tool ' + cls, title: label, 'aria-label': label }, text);
-    b.addEventListener('mousedown', (e) => e.preventDefault());     // keep the text selection in the editor
-    b.addEventListener('click', run);
-    return b;
-  };
-  const emojiPop = el('div', { class: 'emoji-pop', hidden: '' }, EMOJI.map((em) => {
-    const b = tool(em, em, () => { fmt('insertText', em); emojiPop.hidden = true; });
-    return b;
-  }));
-  const linkTool = () => {
-    const url = prompt('Link address (https://…)');
-    if (!url) return;
-    const href = /^[a-z]+:/i.test(url) ? url : 'https://' + url;
-    if (window.getSelection()?.toString()) fmt('createLink', href); else fmt('insertHTML', `<a href="${escapeHtml(href)}">${escapeHtml(url)}</a>`);
-  };
-
   const sendBtn = el('button', { type: 'button' }, 'Send');
   const sendArchive = el('button', { type: 'button', class: 'primary' }, 'Send + Archive');
   const doSend = async (archiveAfter) => {
-    const text = editor.innerText.trim();
-    if (!text && !files.length) { editor.focus(); return; }
+    if (rich.isEmpty()) { rich.editor.focus(); return; }
     sendBtn.disabled = sendArchive.disabled = true;
     const was = archiveAfter ? sendArchive : sendBtn, label = was.textContent;
     was.textContent = 'Sending…';
     try {
-      await sendMail(replyHeaders(last, replyAll), editor.innerText, threadId, { html: editor.innerHTML, files });
+      const c = rich.content();
+      await sendMail(replyHeaders(last, replyAll), c.text, threadId, { html: c.html, files: c.files });
       if (state.replyDraft === me) state.replyDraft = null;      // sent: nothing to keep
       if (draftId) api(`/drafts/${draftId}`, { method: 'DELETE' }).catch(() => {});
       toast('Reply sent');
@@ -1859,41 +1883,29 @@ function renderReplyBox(last, threadId, draft = null) {
   sendBtn.addEventListener('click', () => doSend(false));
   sendArchive.addEventListener('click', () => doSend(true));
 
-  const tools = el('div', { class: 'reply-tools' }, [
-    sendArchive, sendBtn, el('span', { class: 'sep' }),
-    tool('Bold', 'B', () => fmt('bold'), 'b'), tool('Italic', 'I', () => fmt('italic'), 'i'),
-    tool('Underline', 'U', () => fmt('underline'), 'u'),
-    tool('Bulleted list', '•', () => fmt('insertUnorderedList')), tool('Numbered list', '1.', () => fmt('insertOrderedList')),
-    el('span', { class: 'sep' }),
-    tool('Attach files', '📎', () => picker.click()), tool('Insert link', '🔗', linkTool),
-    tool('Emoji', '😊', () => { emojiPop.hidden = !emojiPop.hidden; }),
-  ]);
   setMode(true);
-  if (draft) {                                     // pick up where Paul left off
-    const html = findPart(draft.message.payload, 'text/html'), text = findPart(draft.message.payload, 'text/plain');
-    editor.innerHTML = html ? cleanHtml(decodePart(html)) : escapeHtml(text ? decodePart(text) : '').replace(/\n/g, '<br>');
+  if (draft) {
+    rich.loadDraft(draft.message);
     setMode(!!header(draft.message, 'cc') || splitAddrs(header(draft.message, 'to')).length > 1);
-    Promise.all(attachmentsOf(draft.message.payload).map(async (p) => {
-      const r = await api(`/messages/${draft.message.id}/attachments/${p.body.attachmentId}`);
-      return new File([b64urlBytes(r.data)], p.filename, { type: p.mimeType });
-    })).then((got) => { files.push(...got); renderChips(); }).catch(() => toast('Could not load the draft\'s attachments'));
   }
   const me = {
     threadId,
     async save() {
       if (!dirty) return;
-      if (!editor.innerText.trim() && !files.length) {      // emptied: drop the old draft
+      if (rich.isEmpty()) {                                    // emptied: drop the old draft
         if (draftId) await api(`/drafts/${draftId}`, { method: 'DELETE' });
         return;
       }
-      draftId = await saveDraft(replyHeaders(last, replyAll), editor.innerText, threadId, draftId, { html: editor.innerHTML, files });
+      const c = rich.content();
+      draftId = await saveDraft(replyHeaders(last, replyAll), c.text, threadId, draftId, { html: c.html, files: c.files });
       dirty = false;
       toast('Draft saved');
     },
   };
   state.replyDraft = me;
   return el('div', { class: 'reply' }, [
-    el('div', { class: 'reply-modes' }, [allBtn, oneBtn]), who, editor, chips, emojiPop, tools, picker,
+    el('div', { class: 'reply-modes' }, [allBtn, oneBtn]), who, rich.editor, rich.chips, rich.emojiPop,
+    el('div', { class: 'reply-tools' }, [sendArchive, sendBtn, el('span', { class: 'sep' }), ...rich.formatTools]), rich.picker,
   ]);
 }
 
@@ -2001,44 +2013,46 @@ async function openThread(id) {
   }
 }
 
-// New message. Closing it with anything typed keeps it as a Gmail draft; a new-message draft opened
-// from the Drafts folder comes back here (draft = { id, message }).
+// New message, with the same editor and controls as replies. Closing it with anything typed keeps it
+// as a Gmail draft; a new-message draft opened from the Drafts folder comes back here (draft = { id, message }).
 function openCompose(draft = null) {
   flushReplyDraft();
   state.openId = null;
   document.querySelectorAll('.card.open').forEach((c) => c.classList.remove('open'));
+  let draftId = draft?.id || null, dirty = false;
+  const changed = () => { dirty = true; };
   const to = el('input', { placeholder: 'To', autocomplete: 'email' });
   const subject = el('input', { placeholder: 'Subject' });
-  const body = el('textarea', { rows: '12', placeholder: 'Message' });
-  const send = el('button', { class: 'primary' }, 'Send');
-  let draftId = draft?.id || null, dirty = false;
+  for (const f of [to, subject]) f.addEventListener('input', changed);
+  const rich = richEditor('Message', changed);
   if (draft) {
     to.value = header(draft.message, 'to');
     subject.value = header(draft.message, 'subject');
-    const text = findPart(draft.message.payload, 'text/plain'), html = findPart(draft.message.payload, 'text/html');
-    body.value = text ? decodePart(text)
-      : html ? new DOMParser().parseFromString(decodePart(html), 'text/html').body.innerText : '';
+    rich.loadDraft(draft.message);
   }
-  for (const f of [to, subject, body]) f.addEventListener('input', () => { dirty = true; });
+  const headers = () => ({ To: to.value.trim(), Subject: subject.value });
   const me = {
     threadId: null,
     async save() {
       if (!dirty) return;
-      if (!to.value.trim() && !subject.value.trim() && !body.value.trim()) {   // emptied: drop the old draft
+      if (!to.value.trim() && !subject.value.trim() && rich.isEmpty()) {   // emptied: drop the old draft
         if (draftId) await api(`/drafts/${draftId}`, { method: 'DELETE' });
         return;
       }
-      draftId = await saveDraft({ To: to.value.trim(), Subject: subject.value }, body.value, null, draftId);
+      const c = rich.content();
+      draftId = await saveDraft(headers(), c.text, null, draftId, { html: c.html, files: c.files });
       dirty = false;
       toast('Draft saved');
     },
   };
+  const send = el('button', { type: 'button', class: 'primary' }, 'Send');
   send.addEventListener('click', async () => {
     if (!to.value.trim()) { to.focus(); return; }
     send.disabled = true;
     send.textContent = 'Sending…';
     try {
-      await sendMail({ To: to.value.trim(), Subject: subject.value }, body.value);
+      const c = rich.content();
+      await sendMail(headers(), c.text, null, { html: c.html, files: c.files });
       if (state.replyDraft === me) state.replyDraft = null;      // sent: nothing to keep
       if (draftId) api(`/drafts/${draftId}`, { method: 'DELETE' }).catch(() => {});
       toast('Sent');
@@ -2050,10 +2064,13 @@ function openCompose(draft = null) {
     }
   });
   const reader = $('#reader');
-  reader.replaceChildren(readerHead(draft ? 'Draft' : 'New message'), el('div', { class: 'compose' }, [to, subject, body, el('div', { class: 'row' }, [send])]));
+  reader.replaceChildren(readerHead(draft ? 'Draft' : 'New message'), el('div', { class: 'compose' }, [
+    to, subject, rich.editor, rich.chips, rich.emojiPop,
+    el('div', { class: 'reply-tools' }, [send, el('span', { class: 'sep' }), ...rich.formatTools]), rich.picker,
+  ]));
   reader.hidden = false;
   state.replyDraft = me;
-  (draft && to.value ? body : to).focus();
+  (draft && to.value ? rich.editor : to).focus();
 }
 
 function closeReader() {

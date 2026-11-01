@@ -336,3 +336,4 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 .emoji-pop { display: grid; grid-template-columns: repeat(8, 36px); gap: .2rem; padding: .4rem; border: 1px solid var(--border); border-radius: 8px; width: max-content; }
 .emoji-pop[hidden] { display: none; }
 .emoji-pop .tool { width: 36px; min-height: 36px; padding: 0; font-size: 1.15rem; background: transparent; border-color: transparent; }
+.compose .reply-editor { min-height: 280px; }
