@@ -742,7 +742,7 @@ function renderSidebar() {
   const add = el('button', { class: 'icon-btn', title: 'Create new label', 'aria-label': 'Create new label' }, '+');
   add.addEventListener('click', () => createLabel(''));
 
-  nav.replaceChildren(
+  nav.replaceChildren(...[ // null = a toggle that isn't needed; replaceChildren would print it as "null"
     ...shownFolders.map(folderRow),
     ...(state.navMore ? moreFolders.map(folderRow) : []),
     moreFolders.length ? navToggle(state.navMore, () => { state.navMore = !state.navMore; store.set('navMore', state.navMore); renderSidebar(); }) : null,
@@ -750,7 +750,7 @@ function renderSidebar() {
     ...shownLabels.map(labelRow),
     ...(state.labelsMore ? moreLabels.map(labelRow) : []),
     moreLabels.length ? navToggle(state.labelsMore, () => { state.labelsMore = !state.labelsMore; store.set('labelsMore', state.labelsMore); renderSidebar(); }) : null,
-  );
+  ].filter(Boolean));
 }
 
 // ----- sidebar menus -----
