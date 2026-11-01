@@ -35,7 +35,6 @@ const settings = {
   clientId: store.get('clientId', ''),
   inboxName: store.get('inboxName', 'Inbox'),
   columns: store.get('columns', ['To Do', 'Waiting', 'Done']),
-  lastArchives: store.get('lastArchives', true),
   colWidth: store.get('colWidth', null),   // px shared by all columns; null = automatic
   readerWidth: store.get('readerWidth', null),   // px for the opened-email panel; null = normal (760)
 };
@@ -43,7 +42,7 @@ const settings = {
 function columns() {
   const cols = [{ name: settings.inboxName, inbox: true }];
   settings.columns.forEach((name, i) =>
-    cols.push({ name, archive: settings.lastArchives && i === settings.columns.length - 1 }));
+    cols.push({ name }));   // every column just sorts; only Archive archives
   return cols;
 }
 
@@ -1358,8 +1357,7 @@ function addColumn(name) {
   if (existing.includes(name.toLowerCase())) { toast('There is already a column with that name.'); return; }
   if (existing.length >= 9) { toast('Nine columns at most.'); return; }
   const list = [...settings.columns];
-  // Keep the archiving column last, if there is one.
-  if (settings.lastArchives) list.splice(list.length - 1, 0, name); else list.push(name);
+  list.push(name);
   saveColumnList(list);
 }
 
@@ -1893,7 +1891,6 @@ function openSettings() {
     columnRow(settings.inboxName, null, true),
     ...settings.columns.map((n) => columnRow(n, n)),
   );
-  $('#set-archive').checked = settings.lastArchives;
   $('#set-client').value = settings.clientId;
   $('#set-error').textContent = '';
   $('#settings').showModal();
@@ -1914,7 +1911,6 @@ function readSettingsForm() {
   return {
     inboxName: names[0],
     cols,
-    lastArchives: $('#set-archive').checked,
     clientId: $('#set-client').value.trim(),
   };
 }
@@ -1936,7 +1932,13 @@ async function renameLabel(oldName, newName) {
   state.labelIds[newName] = id;
 }
 
-async function applySettings({ inboxName, cols, lastArchives, clientId }) {
+// Gmail's rules are its filters; they live in Gmail's own settings (opened for the signed-in account).
+function openGmailRules() {
+  const who = state.me ? `?authuser=${encodeURIComponent(state.me)}` : '';
+  window.open(`https://mail.google.com/mail/${who}#settings/filters`, '_blank', 'noopener');
+}
+
+async function applySettings({ inboxName, cols, clientId }) {
   for (const c of cols) {
     if (!c.orig || c.orig === c.name) continue;
     try {
@@ -1948,10 +1950,8 @@ async function applySettings({ inboxName, cols, lastArchives, clientId }) {
   }
   settings.inboxName = inboxName;
   settings.columns = cols.map((c) => c.name);
-  settings.lastArchives = lastArchives;
   store.set('inboxName', settings.inboxName);
   store.set('columns', settings.columns);
-  store.set('lastArchives', settings.lastArchives);
   if (clientId && clientId !== settings.clientId) {
     store.set('clientId', clientId);
     location.reload();
@@ -2029,6 +2029,7 @@ function wireUi() {
     row.querySelector('input').focus();
   });
   $('#set-signout').addEventListener('click', () => { $('#settings').close(); signOut(); });
+  $('#set-rules').addEventListener('click', openGmailRules);
   $('#btn-setup-save').addEventListener('click', () => {
     const id = $('#setup-client').value.trim();
     if (!id) return;
