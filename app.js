@@ -2846,6 +2846,7 @@ function setupSearchSuggest() {
 
 function wireUi() {
   setupSearchSuggest();
+  new ResizeObserver(() => document.body.style.setProperty('--bar-h', $('.bar').offsetHeight + 'px')).observe($('.bar'));   // phones: folders open below the bar
   document.addEventListener('mousemove', (e) => { state.pointer = { x: e.clientX, y: e.clientY }; }, { passive: true });
   $('#btn-signin').addEventListener('click', signIn);
   $('#banner-btn').addEventListener('click', signIn);

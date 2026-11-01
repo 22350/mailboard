@@ -407,3 +407,29 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 /* Delete key: the first press marks the card; a second press trashes it. */
 .card.delete-armed { outline: 2px solid #e05555; outline-offset: -2px; background: rgba(224, 85, 85, .12); }
 .card .delete-hint { margin-top: .35rem; font-size: .8rem; font-weight: 600; color: #e05555; }
+
+/* ---------- Phones: two-row top bar, one column per screen (swipe snaps), full-screen email ---------- */
+@media (max-width: 640px) {
+  .bar { flex-wrap: wrap; row-gap: .5rem; padding: .5rem .75rem; }
+  .bar h1 { display: block; font-size: 1.05rem; }
+  .bar .status, .bar .spacer { display: none; }
+  .bar h1 { margin-right: auto; }
+  .bar .search-box { order: 10; flex: 1 0 100%; }
+  .bar .search-box input { width: 100%; }
+  .suggest { width: calc(100vw - 1.5rem) !important; min-width: 0; }
+  /* Compose / Refresh / Settings become small icon buttons */
+  #btn-compose, #btn-refresh, #btn-settings { font-size: 0; width: 40px; min-height: 40px; padding: 0; display: inline-grid; place-items: center; }
+  #btn-compose[hidden], #btn-refresh[hidden] { display: none; }
+  #btn-compose::before { content: '✏️'; font-size: 1.05rem; }
+  #btn-refresh::before { content: '↻'; font-size: 1.3rem; }
+  #btn-settings::before { content: '⚙'; font-size: 1.25rem; }
+  .sidebar { top: var(--bar-h, 104px); }
+  /* one column per screen; a sideways swipe snaps to the next */
+  .board { scroll-snap-type: x mandatory; gap: .75rem; padding: .75rem; }
+  .column, body.cols-sized .column { flex: 0 0 calc(100vw - 1.5rem) !important; width: auto; max-width: none; scroll-snap-align: center; }
+  .col-resize, .reader-resize, .reader-widen { display: none !important; }
+  .reader { width: 100% !important; padding: .75rem; }
+  .reader-head { margin: -.75rem -.75rem 0; padding: .75rem; }
+  .reader-head .esc-hint { display: none; }
+  .actions { gap: .35rem; }
+}
