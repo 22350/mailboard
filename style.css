@@ -343,6 +343,8 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 .addr-item .copy-addr {
   display: none; margin-left: .3rem; padding: .05rem .45rem; min-height: 0; font-size: .75rem; line-height: 1.4;
   border-radius: 6px; vertical-align: 1px;
+  background: #fde2e2; border-color: #f3a5a5; color: #8a1c1c;
 }
+.addr-item .copy-addr:hover { background: #fbcaca; }
 .addr-item:hover .copy-addr, .addr-item:focus-within .copy-addr { display: inline-block; }
 .addr-item:hover { color: var(--text); }

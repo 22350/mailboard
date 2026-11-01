@@ -1660,7 +1660,7 @@ const FRAME_HEAD = '<!doctype html><meta charset="utf-8"><base target="_blank"><
   'html,body{margin:0;background:#fff;color:#111;font:15px/1.5 system-ui,sans-serif;overflow-wrap:anywhere}' +
   'img{max-width:100%;height:auto}table{max-width:100%}' +
   '#mb-copy{position:absolute;z-index:9;font:12px system-ui,sans-serif;padding:2px 8px;border:1px solid #bbb;' +
-  'border-radius:6px;background:#fff;color:#111;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.2)}</style>';
+  'border-radius:6px;background:#fde2e2;border-color:#f3a5a5;color:#8a1c1c;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.2)}</style>';
 
 function bodyFrame(m) {
   const html = findPart(m.payload, 'text/html');
