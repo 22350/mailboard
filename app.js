@@ -1186,13 +1186,54 @@ function b64urlBytes(data) {
 
 const encodeWord = (s) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${bytesToB64(utf8(s))}?=`);
 
-async function sendMail(headers, body, threadId) {
+const wrap76 = (b64) => b64.replace(/.{76}/g, '$&\r\n');
+const b64Part = (type, text) => [`Content-Type: ${type}; charset=UTF-8`, 'Content-Transfer-Encoding: base64', '',
+  wrap76(bytesToB64(utf8(text.replace(/\r?\n/g, '\r\n'))))].join('\r\n');
+
+// Plain text, or (with html / files) multipart: text + HTML alternatives, plus attachments.
+async function sendMail(headers, body, threadId, { html, files = [] } = {}) {
   const lines = [];
   for (const [k, v] of Object.entries(headers)) if (v) lines.push(`${k}: ${k === 'Subject' ? encodeWord(v) : v}`);
-  const encoded = bytesToB64(utf8(body.replace(/\r?\n/g, '\r\n'))).replace(/.{76}/g, '$&\r\n');
-  lines.push('MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '', encoded);
-  const raw = b64url(utf8(lines.join('\r\n')));
-  return api('/messages/send', { method: 'POST', body: threadId ? { raw, threadId } : { raw } });
+  lines.push('MIME-Version: 1.0');
+  let content = b64Part('text/plain', body);
+  if (html) {
+    const alt = 'alt' + Math.random().toString(36).slice(2);
+    content = [`Content-Type: multipart/alternative; boundary="${alt}"`, '', `--${alt}`, b64Part('text/plain', body),
+      `--${alt}`, b64Part('text/html', `<div dir="ltr">${html}</div>`), `--${alt}--`].join('\r\n');
+  }
+  if (files.length) {
+    const mix = 'mix' + Math.random().toString(36).slice(2);
+    const parts = [`Content-Type: multipart/mixed; boundary="${mix}"`, '', `--${mix}`, content];
+    for (const f of files) {
+      const name = encodeWord(f.name).replace(/"/g, '');
+      parts.push(`--${mix}`, `Content-Type: ${f.type || 'application/octet-stream'}; name="${name}"`,
+        `Content-Disposition: attachment; filename="${name}"`, 'Content-Transfer-Encoding: base64', '',
+        wrap76(bytesToB64(new Uint8Array(await f.arrayBuffer()))));
+    }
+    parts.push(`--${mix}--`);
+    content = parts.join('\r\n');
+  }
+  const mime = utf8(lines.join('\r\n') + '\r\n' + content);
+  if (mime.length < 4.5e6) {
+    const raw = b64url(mime);
+    return api('/messages/send', { method: 'POST', body: threadId ? { raw, threadId } : { raw } });
+  }
+  return uploadSend(mime, threadId);    // big attachments: Gmail's upload endpoint (up to 35 MB)
+}
+
+async function uploadSend(mime, threadId) {
+  if (!state.token || Date.now() > state.tokenExp) { needSignIn(); throw new AuthError('Signed out'); }
+  const b = 'up' + Math.random().toString(36).slice(2);
+  const head = utf8(`--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(threadId ? { threadId } : {})}\r\n` +
+    `--${b}\r\nContent-Type: message/rfc822\r\n\r\n`);
+  const res = await fetch('https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=multipart', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + state.token, 'Content-Type': `multipart/related; boundary=${b}` },
+    body: new Blob([head, mime, utf8(`\r\n--${b}--`)]),
+  });
+  if (res.status === 401) { needSignIn(); throw new AuthError('Session expired'); }
+  if (!res.ok) { let msg = res.statusText; try { msg = (await res.json()).error.message; } catch {} throw new Error(msg); }
+  return res.json();
 }
 
 const addrOf = (s) => (/<([^>]+)>/.exec(s)?.[1] || s).trim().toLowerCase();
@@ -1707,26 +1748,91 @@ function renderActions(box, id) {
   );
 }
 
+const EMOJI = '😀 😂 😊 😍 🙂 😉 😎 🤔 😢 😮 👍 👎 👏 🙏 💪 👋 ❤️ 🎉 ✅ ❌ ⭐ 🔥 💡 📎'.split(' ');
+const nameOf = (a) => (/^\s*"?([^"<]+?)"?\s*</.exec(a)?.[1] || addrOf(a)).trim();
+
+// Reply box: Reply all by default (Reply only = just the sender), a formatted editor, and Gmail-style
+// controls along the bottom: Send + Archive, Send, formatting, attach, link, emoji.
 function renderReplyBox(last, threadId) {
-  const ta = el('textarea', { rows: '6', placeholder: 'Write a reply…' });
-  const all = el('input', { type: 'checkbox' });
-  const send = el('button', { class: 'primary' }, 'Send reply');
-  send.addEventListener('click', async () => {
-    if (!ta.value.trim()) { ta.focus(); return; }
-    send.disabled = true;
-    send.textContent = 'Sending…';
+  let replyAll = true;
+  const files = [];
+  const who = el('div', { class: 'reply-who' });
+  const allBtn = el('button', { type: 'button' }, 'Reply all');
+  const oneBtn = el('button', { type: 'button' }, 'Reply only');
+  const setMode = (all) => {
+    replyAll = all;
+    allBtn.classList.toggle('current', all);
+    oneBtn.classList.toggle('current', !all);
+    const h = replyHeaders(last, all);
+    who.textContent = (all ? 'REPLY ALL to: ' : 'REPLY to: ') + [h.To, h.Cc].filter(Boolean).flatMap(splitAddrs).map(nameOf).join(', ');
+  };
+  allBtn.addEventListener('click', () => setMode(true));
+  oneBtn.addEventListener('click', () => setMode(false));
+
+  const editor = el('div', { class: 'reply-editor', contenteditable: 'true', role: 'textbox', 'aria-multiline': 'true',
+    'data-placeholder': 'Write your reply…' });
+  const chips = el('div', { class: 'reply-files' });
+  const renderChips = () => chips.replaceChildren(...files.map((f, i) => {
+    const x = el('button', { type: 'button', title: 'Remove', 'aria-label': `Remove ${f.name}` }, '✕');
+    x.addEventListener('click', () => { files.splice(i, 1); renderChips(); });
+    return el('span', { class: 'chip' }, [`📎 ${f.name} (${Math.max(1, Math.round(f.size / 1024))} KB)`, x]);
+  }));
+  const picker = el('input', { type: 'file', multiple: '', hidden: '' });
+  picker.addEventListener('change', () => { files.push(...picker.files); picker.value = ''; renderChips(); });
+
+  const fmt = (cmd, arg) => { editor.focus(); document.execCommand(cmd, false, arg); };
+  const tool = (label, text, run, cls = '') => {
+    const b = el('button', { type: 'button', class: 'tool ' + cls, title: label, 'aria-label': label }, text);
+    b.addEventListener('mousedown', (e) => e.preventDefault());     // keep the text selection in the editor
+    b.addEventListener('click', run);
+    return b;
+  };
+  const emojiPop = el('div', { class: 'emoji-pop', hidden: '' }, EMOJI.map((em) => {
+    const b = tool(em, em, () => { fmt('insertText', em); emojiPop.hidden = true; });
+    return b;
+  }));
+  const linkTool = () => {
+    const url = prompt('Link address (https://…)');
+    if (!url) return;
+    const href = /^[a-z]+:/i.test(url) ? url : 'https://' + url;
+    if (window.getSelection()?.toString()) fmt('createLink', href); else fmt('insertHTML', `<a href="${escapeHtml(href)}">${escapeHtml(url)}</a>`);
+  };
+
+  const sendBtn = el('button', { type: 'button' }, 'Send');
+  const sendArchive = el('button', { type: 'button', class: 'primary' }, 'Send + Archive');
+  const doSend = async (archiveAfter) => {
+    const text = editor.innerText.trim();
+    if (!text && !files.length) { editor.focus(); return; }
+    sendBtn.disabled = sendArchive.disabled = true;
+    const was = archiveAfter ? sendArchive : sendBtn, label = was.textContent;
+    was.textContent = 'Sending…';
     try {
-      await sendMail(replyHeaders(last, all.checked), ta.value, threadId);
+      await sendMail(replyHeaders(last, replyAll), editor.innerText, threadId, { html: editor.innerHTML, files });
       toast('Reply sent');
-      openThread(threadId);
+      if (archiveAfter) { closeReader(); await archiveThread(threadId); } else openThread(threadId);
       loadBoard();
     } catch (e) {
       if (!(e instanceof AuthError)) toast('Send failed: ' + e.message);
-      send.disabled = false;
-      send.textContent = 'Send reply';
+      sendBtn.disabled = sendArchive.disabled = false;
+      was.textContent = label;
     }
-  });
-  return el('div', { class: 'reply' }, [ta, el('div', { class: 'row' }, [el('label', { class: 'check' }, [all, 'Reply all']), send])]);
+  };
+  sendBtn.addEventListener('click', () => doSend(false));
+  sendArchive.addEventListener('click', () => doSend(true));
+
+  const tools = el('div', { class: 'reply-tools' }, [
+    sendArchive, sendBtn, el('span', { class: 'sep' }),
+    tool('Bold', 'B', () => fmt('bold'), 'b'), tool('Italic', 'I', () => fmt('italic'), 'i'),
+    tool('Underline', 'U', () => fmt('underline'), 'u'),
+    tool('Bulleted list', '•', () => fmt('insertUnorderedList')), tool('Numbered list', '1.', () => fmt('insertOrderedList')),
+    el('span', { class: 'sep' }),
+    tool('Attach files', '📎', () => picker.click()), tool('Insert link', '🔗', linkTool),
+    tool('Emoji', '😊', () => { emojiPop.hidden = !emojiPop.hidden; }),
+  ]);
+  setMode(true);
+  return el('div', { class: 'reply' }, [
+    el('div', { class: 'reply-modes' }, [allBtn, oneBtn]), who, editor, chips, emojiPop, tools, picker,
+  ]);
 }
 
 // The opened-email panel can be widened: drag its left edge, or the wider/narrower button in its
@@ -1783,7 +1889,8 @@ function setupReaderResize() {
 function readerHead(title) {
   const close = el('button', { 'aria-label': 'Close' }, '✕');
   close.addEventListener('click', closeReader);
-  return el('div', { class: 'reader-head' }, [el('h2', {}, title), widenButton(), close]);
+  const esc = el('kbd', { class: 'esc-hint', title: 'Press Esc to close' }, 'ESC');
+  return el('div', { class: 'reader-head' }, [el('h2', {}, title), widenButton(), esc, close]);
 }
 
 async function openThread(id) {
