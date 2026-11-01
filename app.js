@@ -1977,6 +1977,7 @@ async function openThread(id) {
       if (d) draft = { id: d.id, message: draftMsg };
     }
     if (state.openId !== id) return;
+    if (!msgs.length && draft) { openCompose(draft); return; }   // a new-message draft, not a reply
     const actions = el('div', { class: 'actions', id: 'reader-actions' });
     renderActions(actions, id);
     reader.replaceChildren(
@@ -2000,7 +2001,9 @@ async function openThread(id) {
   }
 }
 
-function openCompose() {
+// New message. Closing it with anything typed keeps it as a Gmail draft; a new-message draft opened
+// from the Drafts folder comes back here (draft = { id, message }).
+function openCompose(draft = null) {
   flushReplyDraft();
   state.openId = null;
   document.querySelectorAll('.card.open').forEach((c) => c.classList.remove('open'));
@@ -2008,12 +2011,36 @@ function openCompose() {
   const subject = el('input', { placeholder: 'Subject' });
   const body = el('textarea', { rows: '12', placeholder: 'Message' });
   const send = el('button', { class: 'primary' }, 'Send');
+  let draftId = draft?.id || null, dirty = false;
+  if (draft) {
+    to.value = header(draft.message, 'to');
+    subject.value = header(draft.message, 'subject');
+    const text = findPart(draft.message.payload, 'text/plain'), html = findPart(draft.message.payload, 'text/html');
+    body.value = text ? decodePart(text)
+      : html ? new DOMParser().parseFromString(decodePart(html), 'text/html').body.innerText : '';
+  }
+  for (const f of [to, subject, body]) f.addEventListener('input', () => { dirty = true; });
+  const me = {
+    threadId: null,
+    async save() {
+      if (!dirty) return;
+      if (!to.value.trim() && !subject.value.trim() && !body.value.trim()) {   // emptied: drop the old draft
+        if (draftId) await api(`/drafts/${draftId}`, { method: 'DELETE' });
+        return;
+      }
+      draftId = await saveDraft({ To: to.value.trim(), Subject: subject.value }, body.value, null, draftId);
+      dirty = false;
+      toast('Draft saved');
+    },
+  };
   send.addEventListener('click', async () => {
     if (!to.value.trim()) { to.focus(); return; }
     send.disabled = true;
     send.textContent = 'Sending…';
     try {
       await sendMail({ To: to.value.trim(), Subject: subject.value }, body.value);
+      if (state.replyDraft === me) state.replyDraft = null;      // sent: nothing to keep
+      if (draftId) api(`/drafts/${draftId}`, { method: 'DELETE' }).catch(() => {});
       toast('Sent');
       closeReader();
     } catch (e) {
@@ -2023,9 +2050,10 @@ function openCompose() {
     }
   });
   const reader = $('#reader');
-  reader.replaceChildren(readerHead('New message'), el('div', { class: 'compose' }, [to, subject, body, el('div', { class: 'row' }, [send])]));
+  reader.replaceChildren(readerHead(draft ? 'Draft' : 'New message'), el('div', { class: 'compose' }, [to, subject, body, el('div', { class: 'row' }, [send])]));
   reader.hidden = false;
-  to.focus();
+  state.replyDraft = me;
+  (draft && to.value ? body : to).focus();
 }
 
 function closeReader() {
@@ -2187,7 +2215,7 @@ function wireUi() {
   $('#btn-signin').addEventListener('click', signIn);
   $('#banner-btn').addEventListener('click', signIn);
   $('#btn-refresh').addEventListener('click', loadBoard);
-  $('#btn-compose').addEventListener('click', openCompose);
+  $('#btn-compose').addEventListener('click', () => openCompose());
   $('#btn-menu').addEventListener('click', () => setSidebar(!state.sidebarOpen));
   $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); runSearch($('#search').value); });
   $('#search').addEventListener('keydown', (e) => { if (e.key === 'Escape') clearSearch(); });
