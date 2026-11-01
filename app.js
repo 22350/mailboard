@@ -36,6 +36,7 @@ const settings = {
   inboxName: store.get('inboxName', 'Inbox'),
   columns: store.get('columns', ['To Do', 'Waiting', 'Done']),
   lastArchives: store.get('lastArchives', true),
+  colWidth: store.get('colWidth', null),   // px shared by all columns; null = automatic
 };
 
 function columns() {
@@ -1396,12 +1397,14 @@ function renderSearchColumn() {
   if (sort.key !== 'newest') ids.sort((a, b) => sort.cmp(state.threads.get(a), state.threads.get(b)));
   const sortBtn = iconButton(`Sort: ${sort.label}`, 'sort', (b) => openSortMenu(b, col));
   if (sort.key !== 'newest') sortBtn.classList.add('on');
-  return el('section', { class: 'column search', 'data-col': '-1' }, [
+  const node = el('section', { class: 'column search', 'data-col': '-1' }, [
     el('h2', {}, [columnCheckbox(-1), el('span', { class: 'q' }, title || `“${q}”`), el('span', { class: 'count' }, ids.length + (more ? '+' : '')), sortBtn, close]),
     el('div', { class: 'cards' }, ids.length
       ? ids.map((id) => renderCard(state.threads.get(id), -1))
       : el('p', { class: 'hint' }, title ? 'Nothing here.' : 'No matches.')),
   ]);
+  node.append(...resizeHandles(node));
+  return node;
 }
 
 const COLUMN_DRAG = 'application/x-mailboard-column';
@@ -1419,6 +1422,49 @@ function moveColumn(from, to, after) {
   saveColumnList(list);
 }
 
+// One width for every column. Dragging the handle at a column's top-left or top-right corner sets
+// it for all of them; double-click a handle to go back to automatic widths. Remembered per browser.
+const COL_MIN = 220, COL_MAX = 900;
+
+function applyColumnWidth(w) {
+  document.body.classList.toggle('cols-sized', !!w);
+  if (w) document.body.style.setProperty('--col-w', `${w}px`);
+  else document.body.style.removeProperty('--col-w');
+}
+
+function resizeHandles(node) {
+  return ['left', 'right'].map((side) => {
+    const h = el('div', { class: `col-resize ${side}`, title: 'Drag to resize all columns · double-click for automatic widths' });
+    h.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX, startW = node.getBoundingClientRect().width, dir = side === 'right' ? 1 : -1;
+      h.setPointerCapture(e.pointerId);
+      document.body.classList.add('col-resizing');
+      const move = (ev) => {
+        const w = Math.round(Math.min(COL_MAX, Math.max(COL_MIN, startW + dir * (ev.clientX - startX))));
+        applyColumnWidth(w);
+        settings.colWidth = w;
+      };
+      const up = () => {
+        h.removeEventListener('pointermove', move);
+        document.body.classList.remove('col-resizing');
+        store.set('colWidth', settings.colWidth);
+      };
+      h.addEventListener('pointermove', move);
+      h.addEventListener('pointerup', up, { once: true });
+      h.addEventListener('pointercancel', up, { once: true });
+    });
+    h.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      settings.colWidth = null;
+      store.set('colWidth', null);
+      applyColumnWidth(null);
+    });
+    return h;
+  });
+}
+
 function renderColumn(col, i) {
   const ids = state.board[i] || [];
   const sort = sortOf(col);
@@ -1431,6 +1477,7 @@ function renderColumn(col, i) {
     head,
     el('div', { class: 'cards' }, ids.map((id) => renderCard(state.threads.get(id), i))),
   ]);
+  node.append(...resizeHandles(node));
   const clearMarks = () => node.classList.remove('drop', 'insert-before', 'insert-after');
   if (columnMovable(col, i)) {
     head.draggable = true;
@@ -1942,6 +1989,7 @@ function wireUi() {
 }
 
 async function start() {
+  applyColumnWidth(settings.colWidth);
   show('board');
   if (!state.me) {
     try {

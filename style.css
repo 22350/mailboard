@@ -274,3 +274,18 @@ dialog h2 { margin: 0; }
   .column { flex-basis: 85vw; scroll-snap-align: start; }
   .bar h1 { display: none; }
 }
+
+/* Column resizing: grab handles at each column's top corners set one width for all columns. */
+.column { position: relative; }
+body.cols-sized .column { flex: 0 0 var(--col-w); max-width: none; width: var(--col-w); }
+.col-resize {
+  position: absolute; top: 0; width: 12px; height: 46px; z-index: 2; cursor: ew-resize; touch-action: none;
+  border-radius: 6px; opacity: 0; transition: opacity .15s;
+}
+.col-resize.left { left: -7px; }
+.col-resize.right { right: -7px; }
+.col-resize::after {
+  content: ''; position: absolute; top: 12px; bottom: 12px; left: 4px; width: 4px; border-radius: 2px; background: var(--accent);
+}
+.column:hover .col-resize, .col-resize:active, body.col-resizing .col-resize { opacity: .8; }
+body.col-resizing, body.col-resizing * { cursor: ew-resize !important; user-select: none; }
