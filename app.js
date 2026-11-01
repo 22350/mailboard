@@ -1676,6 +1676,8 @@ function bodyFrame(m) {
   frame.addEventListener('load', () => {
     const doc = frame.contentDocument;
     if (!doc) return;
+    // Keys pressed inside the email body don't reach the app; pass Esc on so it still closes the email.
+    doc.addEventListener('keydown', (e) => { if (e.key === 'Escape') onKey({ key: 'Escape', target: frame }); });
     const fit = () => { frame.style.height = doc.documentElement.scrollHeight + 'px'; };
     fit();
     new ResizeObserver(fit).observe(doc.body);
@@ -2191,7 +2193,9 @@ async function applySettings({ inboxName, cols, clientId }) {
 }
 
 function onKey(e) {
-  if (e.target.closest?.('input, textarea, dialog')) return;
+  // Typing in a field ignores shortcuts, except Esc inside the email window: it closes it (drafts are kept).
+  const escInReader = e.key === 'Escape' && e.target.closest?.('#reader');
+  if (e.target.closest?.('input, textarea, dialog') && !escInReader) return;
   if (e.key === 'Escape' && $('#color-pop')) { closeColorPicker(); return; }
   if (e.key === 'Escape' && $('#menu')) { closeMenu(); return; }
   if (e.key === 'Escape' && !$('#reader').hidden) { closeReader(); return; }
