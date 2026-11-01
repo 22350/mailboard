@@ -364,9 +364,9 @@ function columnOf(t, cols) {
 
 const byText = (f) => (a, b) => f(a).localeCompare(f(b), undefined, { sensitivity: 'base' }) || b.date - a.date;
 const SORTS = [
-  { key: 'newest', label: 'Newest first', cmp: (a, b) => b.date - a.date },
-  { key: 'oldest', label: 'Oldest first', cmp: (a, b) => a.date - b.date },
-  { key: 'unread', label: 'Unread first', cmp: (a, b) => b.unread - a.unread || b.date - a.date },
+  { key: 'newest', label: 'Newest first', cmp: (a, b) => sortTime(b) - sortTime(a) },
+  { key: 'oldest', label: 'Oldest first', cmp: (a, b) => sortTime(a) - sortTime(b) },
+  { key: 'unread', label: 'Unread first', cmp: (a, b) => b.unread - a.unread || sortTime(b) - sortTime(a) },
   { key: 'sender', label: 'Sender A–Z', cmp: byText((t) => t.people) },
   { key: 'subject', label: 'Subject A–Z', cmp: byText((t) => t.subject) },
 ];
@@ -1030,6 +1030,36 @@ function setSidebar(open) {
   $('#sidebar').hidden = !open;
 }
 
+// Emails put back into the Inbox (woken from snooze by Gmail or Mailboard, or moved back elsewhere) sort
+// by when they came back, like Gmail puts them at the top. Gmail's change history says which ones;
+// they're loaded even when they're older than the newest 100 the Inbox column normally shows.
+state.bumps = Object.fromEntries(Object.entries(store.get('bumps', {})).filter(([, t]) => Date.now() - t < 14 * 864e5));
+const sortTime = (t) => Math.max(t.date || 0, state.bumps[t.id] || 0);
+
+async function checkReturned() {
+  let start = store.get('historyId', null);
+  if (!start) { store.set('historyId', (await api('/profile')).historyId); return; }
+  const back = new Set();
+  let latest = start, page = '';
+  try {
+    do {
+      const r = await api(`/history?startHistoryId=${start}&historyTypes=labelAdded&labelId=INBOX&maxResults=500${page ? '&pageToken=' + page : ''}`);
+      for (const h of r.history || []) for (const a of h.labelsAdded || []) {
+        if ((a.labelIds || []).includes('INBOX') && a.message?.threadId) back.add(a.message.threadId);
+      }
+      latest = r.historyId || latest;
+      page = r.nextPageToken;
+    } while (page);
+  } catch (e) {
+    if (e instanceof AuthError) throw e;
+    latest = (await api('/profile')).historyId;       // history too old to read: start fresh from now
+  }
+  store.set('historyId', latest);
+  const now = Date.now();
+  for (const id of back) state.bumps[id] = now;
+  store.set('bumps', state.bumps);
+}
+
 async function loadBoard() {
   if (state.loading || state.dragging || state.addingColumn || !state.token) return;
   state.loading = true;
@@ -1038,6 +1068,7 @@ async function loadBoard() {
     const cols = columns();
     await ensureLabels(cols);
     await wakeDueSnoozes();
+    await checkReturned();
     const lists = await Promise.all(cols.map((col) => {
       const p = new URLSearchParams({
         maxResults: col.archive ? '30' : '100',
@@ -1048,7 +1079,15 @@ async function loadBoard() {
     state.more = lists.map((r) => !!r.nextPageToken);
     const listed = new Map();
     for (const t of lists.flatMap((r) => r.threads || [])) listed.set(t.id, t);
+    for (const id of Object.keys(state.bumps)) {         // returned emails, even if older than the newest 100
+      if (!listed.has(id)) listed.set(id, { id, historyId: '' });    // '' = always re-check (few of these; catches archiving elsewhere)
+    }
     const seen = await fetchSummaries([...listed.values()]);
+    for (const id of Object.keys(state.bumps)) {         // no longer in the Inbox or a column: forget it
+      const t = state.threads.get(id);
+      if (!t || columnOf(t, cols) < 0) delete state.bumps[id];
+    }
+    store.set('bumps', state.bumps);
     for (const id of state.search?.ids || []) seen.add(id);
     for (const id of [...state.threads.keys()]) if (!seen.has(id)) state.threads.delete(id);
     assign(cols);
