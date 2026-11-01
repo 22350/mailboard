@@ -9,9 +9,9 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="style.css?v=20261101142127">
+<link rel="stylesheet" href="style.css?v=20261101143318">
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="app.js?v=20261101142127" defer></script>
+<script src="app.js?v=20261101143318" defer></script>
 </head>
 <body>
 <header class="bar">
@@ -64,6 +64,11 @@
     <div class="field">
       <span>Rules</span>
       <button type="button" id="set-rules">Open Gmail rules (filters)</button>
+    </div>
+    <div class="field">
+      <span>Snooze on time (optional)</span>
+      <p class="hint">Mailboard brings snoozed emails back whenever it's open. To have them come back on time even when it's closed (e.g. on your phone): click <b>Copy helper script</b>, open <b>Google Apps Script</b>, make a new project, paste over everything, save, then choose <b>install</b> in the toolbar and click <b>Run</b> (allow access when Google asks). Once is enough.</p>
+      <div class="color-row"><button type="button" id="set-snooze-copy">Copy helper script</button><a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener">Open Google Apps Script</a></div>
     </div>
     <div class="field">
       <span>Title bar color</span>

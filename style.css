@@ -357,3 +357,11 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 .reader-head button, .reader-head .icon-btn { color: var(--bar-text); background: transparent; border-color: transparent; }
 .reader-head button:hover:not(:disabled) { background: rgba(127, 127, 127, .22); }
 .reader-head .esc-hint { color: var(--bar-text); border-color: var(--bar-muted); opacity: .8; }
+
+/* Snooze: when a snoozed email comes back (shown on its card), and the date & time picker. */
+.card .snoozed { display: flex; align-items: center; gap: .3rem; font-size: .8rem; color: #b5651d; margin-top: .25rem; }
+.card .snoozed svg { width: 14px; height: 14px; fill: currentColor; }
+.snooze-pick { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); color: var(--text); padding: 1rem 1.2rem; }
+.snooze-pick h2 { margin: 0 0 .8rem; font-size: 1.1rem; }
+.snooze-pick .row { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .8rem; }
+.snooze-pick::backdrop { background: rgba(0,0,0,.4); }
