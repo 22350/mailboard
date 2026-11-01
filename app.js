@@ -2204,6 +2204,12 @@ function onKey(e) {
   if (e.key === 'Escape' && $('#menu')) { closeMenu(); return; }
   if (e.key === 'Escape' && !$('#reader').hidden) { closeReader(); return; }
   if (e.key === 'Escape' && state.selected.size) { clearSelection(); return; }
+  // Delete / Backspace: the card under the mouse (highlighted) goes to Trash; else the focused card.
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !e.ctrlKey && !e.metaKey && !e.altKey
+      && !e.target.closest?.('#reader, [contenteditable]')) {        // never while typing a reply or message
+    const target = document.querySelector('.card:hover') || document.activeElement?.closest?.('.card');
+    if (target) { e.preventDefault(); trashThread(target.dataset.id); return; }
+  }
   const card = document.activeElement?.closest?.('.card');
   if (!card || e.ctrlKey || e.metaKey || e.altKey) return;
   const id = card.dataset.id;
