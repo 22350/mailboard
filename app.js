@@ -1800,7 +1800,7 @@ function renderCard(t, colIdx) {
     const cols = columns();
     const c = columnOf(t, cols);
     const place = c >= 0 ? cols[c].name
-      : t.labels.has('TRASH') ? 'Trash' : t.labels.has('SPAM') ? 'Spam' : 'Archived';
+      : t.labels.has('TRASH') ? 'Trash' : t.labels.has('SPAM') ? 'Spam' : snoozedLabelOf(t) || t.labels.has('SNOOZED') ? 'Snoozed' : 'Archived';
     where = el('span', { class: 'where' }, place);
   }
   const card = el('article', {
