@@ -1860,6 +1860,10 @@ function renderReplyBox(last, threadId, draft = null) {
   };
   allBtn.addEventListener('click', () => { setMode(true); dirty = true; });
   oneBtn.addEventListener('click', () => { setMode(false); dirty = true; });
+  // Reply all only makes sense (and is only the default) when it reaches more people than the sender.
+  const people = (all) => { const h = replyHeaders(last, all); return [h.To, h.Cc].filter(Boolean).flatMap(splitAddrs).length; };
+  const group = people(true) > people(false);
+  if (!group) { allBtn.disabled = true; allBtn.title = 'Only one other person in this conversation'; }
 
   const sendBtn = el('button', { type: 'button' }, 'Send');
   const sendArchive = el('button', { type: 'button', class: 'primary' }, 'Send + Archive');
@@ -1885,10 +1889,10 @@ function renderReplyBox(last, threadId, draft = null) {
   sendBtn.addEventListener('click', () => doSend(false));
   sendArchive.addEventListener('click', () => doSend(true));
 
-  setMode(true);
+  setMode(group);
   if (draft) {
     rich.loadDraft(draft.message);
-    setMode(!!header(draft.message, 'cc') || splitAddrs(header(draft.message, 'to')).length > 1);
+    setMode(group && (!!header(draft.message, 'cc') || splitAddrs(header(draft.message, 'to')).length > 1));
   }
   const me = {
     threadId,
