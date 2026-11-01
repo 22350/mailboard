@@ -415,6 +415,7 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
   .bar .status, .bar .spacer { display: none; }
   .bar h1 { margin-right: auto; }
   .bar .search-box { order: 10; flex: 1 0 100%; }
+  .bar .col-picker { color: var(--bar-text); }
   .bar .search-box input { width: 100%; }
   .suggest { width: calc(100vw - 1.5rem) !important; min-width: 0; }
   /* Compose / Refresh / Settings become small icon buttons */
@@ -424,12 +425,20 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
   #btn-refresh::before { content: '↻'; font-size: 1.3rem; }
   #btn-settings::before { content: '⚙'; font-size: 1.25rem; }
   .sidebar { top: var(--bar-h, 104px); }
-  /* one column per screen; a sideways swipe snaps to the next */
-  .board { scroll-snap-type: x mandatory; gap: .75rem; padding: .75rem; }
-  .column, body.cols-sized .column { flex: 0 0 calc(100vw - 1.5rem) !important; width: auto; max-width: none; scroll-snap-align: center; }
+  /* one column at a time, picked with the Columns button */
+  html, body { overflow-x: hidden; }
+  .col-picker { display: block; order: 11; flex: 1 0 100%; text-align: left; font-weight: 600; min-height: 42px; }
+  .col-picker[hidden] { display: none; }
+  .board { gap: 0; padding: .75rem; overflow-x: hidden; }
+  .column, body.cols-sized .column { flex: 1 1 100% !important; width: 100%; max-width: none; }
+  .column:not(.phone-shown), .add-column { display: none !important; }
   .col-resize, .reader-resize, .reader-widen { display: none !important; }
   .reader { width: 100% !important; padding: .75rem; }
   .reader-head { margin: -.75rem -.75rem 0; padding: .75rem; }
   .reader-head .esc-hint { display: none; }
   .actions { gap: .35rem; }
 }
+
+/* Columns picker: phones only */
+.col-picker { display: none; }
+@media (max-width: 640px) { .col-picker:not([hidden]) { display: block; } }

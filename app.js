@@ -1553,7 +1553,7 @@ function show(view) {
   $('#main-row').hidden = view !== 'board';
   $('#signin').hidden = view !== 'signin';
   $('#setup').hidden = view !== 'setup';
-  for (const id of ['btn-compose', 'btn-refresh', 'search-form', 'btn-menu']) $('#' + id).hidden = view !== 'board';
+  for (const id of ['btn-compose', 'btn-refresh', 'search-form', 'btn-menu', 'col-picker']) $('#' + id).hidden = view !== 'board';
   $('#sidebar').hidden = !state.sidebarOpen;
   if (view === 'board') renderSidebar();
 }
@@ -1571,6 +1571,31 @@ function render() {
   board.querySelectorAll('.cards').forEach((c, i) => { c.scrollTop = scrolls[i] || 0; });
   if (focusedId) board.querySelector(`.card[data-id="${focusedId}"]`)?.focus({ preventScroll: true });
   renderBulk();
+  showPhoneColumn();
+}
+
+// Phones show one column at a time, chosen with the full-width "Columns" button under the search box.
+// (-1 = the search / folder column, shown while a search is open.)
+const phone = window.matchMedia('(max-width: 640px)');
+state.phoneCol = store.get('phoneCol', 0);
+
+function showPhoneColumn() {
+  const cols = columns();
+  if (state.phoneCol >= cols.length) state.phoneCol = 0;
+  const shown = state.search ? -1 : state.phoneCol;
+  $('#board').querySelectorAll('.column').forEach((c) => c.classList.toggle('phone-shown', Number(c.dataset.col) === shown));
+  const name = shown < 0 ? (state.search.title || `“${state.search.q}”`) : cols[shown].name;
+  const count = shown < 0 ? state.search.ids.length : (state.board[shown] || []).length;
+  $('#col-picker').textContent = `${name} · ${count}${shown >= 0 && state.more[shown] ? '+' : ''}  ▾`;
+}
+
+function openColumnPicker() {
+  const cols = columns();
+  openMenu($('#col-picker'), [
+    { heading: 'Show column' },
+    ...cols.map((c, i) => ({ label: `${c.name} · ${(state.board[i] || []).length}${state.more[i] ? '+' : ''}`, checked: !state.search && i === state.phoneCol,
+      run: () => { if (state.search) clearSearch(); state.phoneCol = i; store.set('phoneCol', i); showPhoneColumn(); } })),
+  ]);
 }
 
 function saveColumnList(list) {
@@ -2846,6 +2871,7 @@ function setupSearchSuggest() {
 
 function wireUi() {
   setupSearchSuggest();
+  $('#col-picker').addEventListener('click', (e) => { e.stopPropagation(); openColumnPicker(); });
   new ResizeObserver(() => document.body.style.setProperty('--bar-h', $('.bar').offsetHeight + 'px')).observe($('.bar'));   // phones: folders open below the bar
   document.addEventListener('mousemove', (e) => { state.pointer = { x: e.clientX, y: e.clientY }; }, { passive: true });
   $('#btn-signin').addEventListener('click', signIn);
