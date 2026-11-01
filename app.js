@@ -12,6 +12,9 @@ const COLOR_PREFIX = 'Board/Color/';
 // Mailboard/Snooze/20261103-1700Z. Mailboard wakes due ones when it loads; the optional Apps Script
 // helper (Settings) wakes them on time even when Mailboard is closed.
 const SNOOZE_PREFIX = 'Mailboard/Snooze/';
+// Plus one visible label on every Mailboard-snoozed email, so they're easy to find in Gmail's sidebar
+// (Gmail's own Snoozed folder can't be used by apps). Removed again when the email wakes.
+const SNOOZE_FLAG = 'Mailboard Snoozed';
 // Background colors must come from Gmail's fixed label palette.
 const COLORS = [
   { name: 'Red', bg: '#fb4c2f' },
@@ -184,8 +187,9 @@ async function ensureLabels(cols) {
   state.snoozeLabels = labels.filter((l) => l.name.startsWith(SNOOZE_PREFIX))
     .map((l) => ({ id: l.id, name: l.name, due: snoozeDue(l.name) })).filter((l) => l.due);
   state.snoozeIds = new Set(state.snoozeLabels.map((l) => l.id));
+  state.snoozeFlagId = labels.find((l) => l.name === SNOOZE_FLAG)?.id || null;
   state.userLabels = labels
-    .filter((l) => l.type === 'user' && !l.name.startsWith(LABEL_PREFIX) && !l.name.startsWith('Mailboard/') && l.name !== 'Mailboard')
+    .filter((l) => l.type === 'user' && !l.name.startsWith(LABEL_PREFIX) && !l.name.startsWith('Mailboard/') && l.name !== 'Mailboard' && l.name !== SNOOZE_FLAG)
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   for (const col of cols) {
     if (col.inbox) continue;
@@ -261,15 +265,19 @@ async function snoozeThread(id, date) {
       state.snoozeLabels.push(lab);
       state.snoozeIds.add(lab.id);
     }
+    if (!state.snoozeFlagId) {
+      const flag = await api('/labels', { method: 'POST', body: { name: SNOOZE_FLAG, labelListVisibility: 'labelShow', messageListVisibility: 'show' } });
+      state.snoozeFlagId = flag.id;
+    }
     const old = (state.snoozeLabels || []).filter((l) => l.id !== lab.id && t.labels.has(l.id)).map((l) => l.id);
     const wasInbox = t.labels.has('INBOX');
-    await api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: [lab.id], removeLabelIds: ['INBOX', ...old] } });
-    t.labels.add(lab.id); t.labels.delete('INBOX'); old.forEach((l) => t.labels.delete(l));
+    await api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: [lab.id, state.snoozeFlagId], removeLabelIds: ['INBOX', ...old] } });
+    t.labels.add(lab.id); t.labels.add(state.snoozeFlagId); t.labels.delete('INBOX'); old.forEach((l) => t.labels.delete(l));
     if (state.openId === id) closeReader();
     assign(columns()); render();
     toast(`Snoozed until ${whenLabel(date)}`, { label: 'Undo', run: async () => {
-      await api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: wasInbox ? ['INBOX'] : [], removeLabelIds: [lab.id] } });
-      t.labels.delete(lab.id); if (wasInbox) t.labels.add('INBOX');
+      await api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: wasInbox ? ['INBOX'] : [], removeLabelIds: [lab.id, state.snoozeFlagId] } });
+      t.labels.delete(lab.id); t.labels.delete(state.snoozeFlagId); if (wasInbox) t.labels.add('INBOX');
       assign(columns()); render();
     } });
   } catch (e) {
@@ -286,7 +294,7 @@ async function wakeDueSnoozes() {
     do {
       const r = await api(`/threads?labelIds=${lab.id}&maxResults=500${page ? '&pageToken=' + page : ''}`);
       await mapLimit(r.threads || [], 5, (th) => api(`/threads/${th.id}/modify`, { method: 'POST',
-        body: { addLabelIds: ['INBOX', 'UNREAD'], removeLabelIds: [lab.id] } }));
+        body: { addLabelIds: ['INBOX', 'UNREAD'], removeLabelIds: [lab.id, ...(state.snoozeFlagId ? [state.snoozeFlagId] : [])] } }));
       woke += (r.threads || []).length;
       page = r.nextPageToken;
     } while (page);
@@ -566,7 +574,7 @@ async function bulkChange(action, arg) {
     const tl = state.labelIds[target.name];
     return {
       add: [...(target.inbox ? [] : [tl]), ...(target.archive ? [] : ['INBOX'])],
-      remove: [...boardLabels.filter((l) => l !== tl), ...(target.archive ? ['INBOX'] : []), ...(state.snoozeIds || []),
+      remove: [...boardLabels.filter((l) => l !== tl), ...(target.archive ? ['INBOX'] : []), ...(state.snoozeIds || []), ...(state.snoozeFlagId ? [state.snoozeFlagId] : []),
         ...(fromSpamTrash ? ['SPAM', 'TRASH'] : [])],
       verb: `Moved to ${target.name}`,
     };
@@ -720,7 +728,7 @@ function columnCheckbox(key) {
 
 const FOLDERS = [
   { name: 'Inbox', icon: 'inbox', label: 'INBOX', count: 'unread', board: true },
-  { name: 'Snoozed', icon: 'clock', get q() { return ['in:snoozed', ...(state.snoozeLabels || []).map((l) => 'label:' + l.name.toLowerCase().replace(/[/\s]/g, '-'))].join(' OR '); } },
+  { name: 'Snoozed', icon: 'clock', get q() { return ['in:snoozed', 'label:mailboard-snoozed', ...(state.snoozeLabels || []).map((l) => 'label:' + l.name.toLowerCase().replace(/[/\s]/g, '-'))].join(' OR '); } },
   { name: 'Sent', icon: 'send', label: 'SENT' },
   { name: 'Drafts', icon: 'draft', label: 'DRAFT', count: 'total' },
   { name: 'All Mail', icon: 'allmail' },
@@ -1062,7 +1070,7 @@ async function moveThread(id, colIdx) {
   const remove = cols.slice(1).map((c) => state.labelIds[c.name]).filter((l) => l !== targetLabel);
   if (!target.inbox) add.push(targetLabel);
   if (target.archive) remove.push('INBOX'); else add.push('INBOX');
-  remove.push(...[...t.labels].filter((l) => state.snoozeIds?.has(l)));   // moved = no longer snoozed
+  remove.push(...[...t.labels].filter((l) => state.snoozeIds?.has(l) || l === state.snoozeFlagId));   // moved = no longer snoozed
   // Dragging out of the Spam or Trash folder rescues the thread.
   for (const l of ['SPAM', 'TRASH']) if (t.labels.has(l)) remove.push(l);
 
@@ -2331,9 +2339,11 @@ function columnRow(name, orig, isInbox) {
 const SNOOZE_SCRIPT = `// Mailboard snooze helper: brings snoozed emails back to the Inbox on time.
 // Run "install" once (allow access when asked). It then checks every 5 minutes.
 const PREFIX = 'Mailboard/Snooze/';
+const FLAG = 'Mailboard Snoozed';
 
 function wakeSnoozed() {
   const now = new Date();
+  const flag = GmailApp.getUserLabelByName(FLAG);
   GmailApp.getUserLabels().forEach(function (label) {
     const name = label.getName();
     if (name.indexOf(PREFIX) !== 0) return;
@@ -2345,6 +2355,7 @@ function wakeSnoozed() {
     while ((threads = label.getThreads(0, 100)).length) {
       GmailApp.moveThreadsToInbox(threads);
       GmailApp.markThreadsUnread(threads);
+      if (flag) flag.removeFromThreads(threads);
       label.removeFromThreads(threads);
     }
     label.deleteLabel();
