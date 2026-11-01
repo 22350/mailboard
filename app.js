@@ -1191,7 +1191,28 @@ const b64Part = (type, text) => [`Content-Type: ${type}; charset=UTF-8`, 'Conten
   wrap76(bytesToB64(utf8(text.replace(/\r?\n/g, '\r\n'))))].join('\r\n');
 
 // Plain text, or (with html / files) multipart: text + HTML alternatives, plus attachments.
-async function sendMail(headers, body, threadId, { html, files = [] } = {}) {
+async function sendMail(headers, body, threadId, opts = {}) {
+  const mime = await buildMime(headers, body, opts);
+  if (mime.length < 4.5e6) {
+    const raw = b64url(mime);
+    return api('/messages/send', { method: 'POST', body: threadId ? { raw, threadId } : { raw } });
+  }
+  return upload('/messages/send', 'POST', threadId ? { threadId } : {}, mime);   // big attachments (up to 35 MB)
+}
+
+// Save (or update) a Gmail draft on the thread; returns the draft id.
+async function saveDraft(headers, body, threadId, draftId, opts = {}) {
+  const mime = await buildMime(headers, body, opts);
+  const meta = { message: threadId ? { threadId } : {} };
+  if (draftId) meta.id = draftId;
+  const path = draftId ? `/drafts/${draftId}` : '/drafts', method = draftId ? 'PUT' : 'POST';
+  const r = mime.length < 4.5e6
+    ? await api(path, { method, body: { ...meta, message: { ...meta.message, raw: b64url(mime) } } })
+    : await upload(path, method, meta, mime);
+  return r.id;
+}
+
+async function buildMime(headers, body, { html, files = [] } = {}) {
   const lines = [];
   for (const [k, v] of Object.entries(headers)) if (v) lines.push(`${k}: ${k === 'Subject' ? encodeWord(v) : v}`);
   lines.push('MIME-Version: 1.0');
@@ -1213,21 +1234,17 @@ async function sendMail(headers, body, threadId, { html, files = [] } = {}) {
     parts.push(`--${mix}--`);
     content = parts.join('\r\n');
   }
-  const mime = utf8(lines.join('\r\n') + '\r\n' + content);
-  if (mime.length < 4.5e6) {
-    const raw = b64url(mime);
-    return api('/messages/send', { method: 'POST', body: threadId ? { raw, threadId } : { raw } });
-  }
-  return uploadSend(mime, threadId);    // big attachments: Gmail's upload endpoint (up to 35 MB)
+  return utf8(lines.join('\r\n') + '\r\n' + content);
 }
 
-async function uploadSend(mime, threadId) {
+// Gmail's upload endpoint, for messages too big to send as JSON.
+async function upload(path, method, meta, mime) {
   if (!state.token || Date.now() > state.tokenExp) { needSignIn(); throw new AuthError('Signed out'); }
   const b = 'up' + Math.random().toString(36).slice(2);
-  const head = utf8(`--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(threadId ? { threadId } : {})}\r\n` +
+  const head = utf8(`--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n` +
     `--${b}\r\nContent-Type: message/rfc822\r\n\r\n`);
-  const res = await fetch('https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=multipart', {
-    method: 'POST',
+  const res = await fetch(`https://gmail.googleapis.com/upload/gmail/v1/users/me${path}?uploadType=multipart`, {
+    method,
     headers: { Authorization: 'Bearer ' + state.token, 'Content-Type': `multipart/related; boundary=${b}` },
     body: new Blob([head, mime, utf8(`\r\n--${b}--`)]),
   });
@@ -1753,9 +1770,28 @@ const nameOf = (a) => (/^\s*"?([^"<]+?)"?\s*</.exec(a)?.[1] || addrOf(a)).trim()
 
 // Reply box: Reply all by default (Reply only = just the sender), a formatted editor, and Gmail-style
 // controls along the bottom: Send + Archive, Send, formatting, attach, link, emoji.
-function renderReplyBox(last, threadId) {
+// Safe HTML for the editor from a saved draft (no scripts, styles, frames or event handlers).
+function cleanHtml(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script,style,iframe,object,embed,link,meta').forEach((n) => n.remove());
+  doc.querySelectorAll('*').forEach((n) => [...n.attributes].forEach((a) => {
+    if (/^on/i.test(a.name) || /^\s*javascript:/i.test(a.value)) n.removeAttribute(a.name);
+  }));
+  return doc.body.innerHTML;
+}
+
+// Unsent reply text is kept as a Gmail draft on the thread when the email is closed (Esc, ✕, or
+// opening another email), and comes back in the reply box when it's reopened.
+async function flushReplyDraft() {
+  const d = state.replyDraft;
+  state.replyDraft = null;
+  if (d) await d.save().catch((e) => { if (!(e instanceof AuthError)) toast('Could not save draft: ' + e.message); });
+}
+
+function renderReplyBox(last, threadId, draft = null) {
   let replyAll = true;
   const files = [];
+  let draftId = draft?.id || null, dirty = false;
   const who = el('div', { class: 'reply-who' });
   const allBtn = el('button', { type: 'button' }, 'Reply all');
   const oneBtn = el('button', { type: 'button' }, 'Reply only');
@@ -1766,19 +1802,20 @@ function renderReplyBox(last, threadId) {
     const h = replyHeaders(last, all);
     who.textContent = (all ? 'REPLY ALL to: ' : 'REPLY to: ') + [h.To, h.Cc].filter(Boolean).flatMap(splitAddrs).map(nameOf).join(', ');
   };
-  allBtn.addEventListener('click', () => setMode(true));
-  oneBtn.addEventListener('click', () => setMode(false));
+  allBtn.addEventListener('click', () => { setMode(true); dirty = true; });
+  oneBtn.addEventListener('click', () => { setMode(false); dirty = true; });
 
   const editor = el('div', { class: 'reply-editor', contenteditable: 'true', role: 'textbox', 'aria-multiline': 'true',
     'data-placeholder': 'Write your reply…' });
+  editor.addEventListener('input', () => { dirty = true; });
   const chips = el('div', { class: 'reply-files' });
   const renderChips = () => chips.replaceChildren(...files.map((f, i) => {
     const x = el('button', { type: 'button', title: 'Remove', 'aria-label': `Remove ${f.name}` }, '✕');
-    x.addEventListener('click', () => { files.splice(i, 1); renderChips(); });
+    x.addEventListener('click', () => { files.splice(i, 1); dirty = true; renderChips(); });
     return el('span', { class: 'chip' }, [`📎 ${f.name} (${Math.max(1, Math.round(f.size / 1024))} KB)`, x]);
   }));
   const picker = el('input', { type: 'file', multiple: '', hidden: '' });
-  picker.addEventListener('change', () => { files.push(...picker.files); picker.value = ''; renderChips(); });
+  picker.addEventListener('change', () => { files.push(...picker.files); picker.value = ''; dirty = true; renderChips(); });
 
   const fmt = (cmd, arg) => { editor.focus(); document.execCommand(cmd, false, arg); };
   const tool = (label, text, run, cls = '') => {
@@ -1808,6 +1845,8 @@ function renderReplyBox(last, threadId) {
     was.textContent = 'Sending…';
     try {
       await sendMail(replyHeaders(last, replyAll), editor.innerText, threadId, { html: editor.innerHTML, files });
+      if (state.replyDraft === me) state.replyDraft = null;      // sent: nothing to keep
+      if (draftId) api(`/drafts/${draftId}`, { method: 'DELETE' }).catch(() => {});
       toast('Reply sent');
       if (archiveAfter) { closeReader(); await archiveThread(threadId); } else openThread(threadId);
       loadBoard();
@@ -1830,6 +1869,29 @@ function renderReplyBox(last, threadId) {
     tool('Emoji', '😊', () => { emojiPop.hidden = !emojiPop.hidden; }),
   ]);
   setMode(true);
+  if (draft) {                                     // pick up where Paul left off
+    const html = findPart(draft.message.payload, 'text/html'), text = findPart(draft.message.payload, 'text/plain');
+    editor.innerHTML = html ? cleanHtml(decodePart(html)) : escapeHtml(text ? decodePart(text) : '').replace(/\n/g, '<br>');
+    setMode(!!header(draft.message, 'cc') || splitAddrs(header(draft.message, 'to')).length > 1);
+    Promise.all(attachmentsOf(draft.message.payload).map(async (p) => {
+      const r = await api(`/messages/${draft.message.id}/attachments/${p.body.attachmentId}`);
+      return new File([b64urlBytes(r.data)], p.filename, { type: p.mimeType });
+    })).then((got) => { files.push(...got); renderChips(); }).catch(() => toast('Could not load the draft\'s attachments'));
+  }
+  const me = {
+    threadId,
+    async save() {
+      if (!dirty) return;
+      if (!editor.innerText.trim() && !files.length) {      // emptied: drop the old draft
+        if (draftId) await api(`/drafts/${draftId}`, { method: 'DELETE' });
+        return;
+      }
+      draftId = await saveDraft(replyHeaders(last, replyAll), editor.innerText, threadId, draftId, { html: editor.innerHTML, files });
+      dirty = false;
+      toast('Draft saved');
+    },
+  };
+  state.replyDraft = me;
   return el('div', { class: 'reply' }, [
     el('div', { class: 'reply-modes' }, [allBtn, oneBtn]), who, editor, chips, emojiPop, tools, picker,
   ]);
@@ -1894,6 +1956,7 @@ function readerHead(title) {
 }
 
 async function openThread(id) {
+  await flushReplyDraft();                 // save unsent reply text first, so reopening shows it
   state.openId = id;
   document.querySelectorAll('.card.open').forEach((c) => c.classList.remove('open'));
   document.querySelector(`.card[data-id="${id}"]`)?.classList.add('open');
@@ -1903,7 +1966,17 @@ async function openThread(id) {
   try {
     const thread = await api(`/threads/${id}?format=full`);
     if (state.openId !== id) return;
-    const msgs = thread.messages || [];
+    const all = thread.messages || [];
+    const isDraft = (m) => (m.labelIds || []).includes('DRAFT');
+    const msgs = all.filter((m) => !isDraft(m));
+    const draftMsg = all.filter(isDraft).pop();
+    let draft = null;
+    if (draftMsg) {
+      const { drafts = [] } = await api('/drafts?maxResults=500');
+      const d = drafts.find((x) => x.message?.id === draftMsg.id);
+      if (d) draft = { id: d.id, message: draftMsg };
+    }
+    if (state.openId !== id) return;
     const actions = el('div', { class: 'actions', id: 'reader-actions' });
     renderActions(actions, id);
     reader.replaceChildren(
@@ -1911,7 +1984,7 @@ async function openThread(id) {
       actions,
       el('div', { class: 'messages' }, msgs.map((m, i) =>
         renderMessage(m, i === msgs.length - 1 || (m.labelIds || []).includes('UNREAD')))),
-      renderReplyBox(msgs[msgs.length - 1], id),
+      renderReplyBox(msgs[msgs.length - 1] || draftMsg, id, draft),
     );
     const t = state.threads.get(id);
     if (t?.unread) {
@@ -1928,6 +2001,7 @@ async function openThread(id) {
 }
 
 function openCompose() {
+  flushReplyDraft();
   state.openId = null;
   document.querySelectorAll('.card.open').forEach((c) => c.classList.remove('open'));
   const to = el('input', { placeholder: 'To', autocomplete: 'email' });
@@ -1955,6 +2029,7 @@ function openCompose() {
 }
 
 function closeReader() {
+  flushReplyDraft();
   const id = state.openId;
   state.openId = null;
   $('#reader').hidden = true;
