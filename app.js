@@ -737,7 +737,9 @@ function columnCheckbox(key) {
 
 const FOLDERS = [
   { name: 'Inbox', icon: 'inbox', label: 'INBOX', count: 'unread', board: true },
-  { name: 'Snoozed', icon: 'clock', get q() { return ['in:snoozed', 'label:mailboard-snoozed', ...(state.snoozeLabels || []).map((l) => 'label:' + l.name.toLowerCase().replace(/[/\s]/g, '-'))].join(' OR '); } },
+  { name: 'Snoozed', icon: 'clock', q: 'in:snoozed' },                     // Gmail's own snoozes only
+  // Mailboard's snoozes only (the "Mailboard Snoozed" label, plus the wake-time labels in case it was removed)
+  { name: 'Mailboard Snoozed', icon: 'clock', get q() { return ['label:mailboard-snoozed', ...(state.snoozeLabels || []).map((l) => 'label:' + l.name.toLowerCase().replace(/[/\s]/g, '-'))].join(' OR '); } },
   { name: 'Sent', icon: 'send', label: 'SENT' },
   { name: 'Drafts', icon: 'draft', label: 'DRAFT', count: 'total' },
   { name: 'All Mail', icon: 'allmail' },
