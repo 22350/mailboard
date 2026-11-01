@@ -1688,12 +1688,14 @@ function bodyFrame(m) {
     doc.body.append(btn);
     const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
     let hideTimer, lastMove = 0;
-    const showAt = (rect, addr) => {
+    let pointer = { x: 0, y: 0 };
+    const showAt = (rect, addr) => {                    // just above the pointer; stays put for the same address
       clearTimeout(hideTimer);
+      if (!btn.hidden && btn.dataset.addr === addr) return;
       btn.dataset.addr = addr;
-      btn.style.left = (rect.right + doc.defaultView.scrollX + 6) + 'px';
-      btn.style.top = (rect.top + doc.defaultView.scrollY - 2) + 'px';
       btn.hidden = false;
+      btn.style.left = Math.max(2, pointer.x + doc.defaultView.scrollX - btn.offsetWidth / 2) + 'px';
+      btn.style.top = Math.max(2, pointer.y + doc.defaultView.scrollY - btn.offsetHeight - 8) + 'px';
     };
     const hideSoon = () => { clearTimeout(hideTimer); hideTimer = setTimeout(() => { btn.hidden = true; }, 500); };
     const addressAt = (x, y) => {                         // the email address under the mouse, as {rect, addr}
@@ -1713,6 +1715,7 @@ function bodyFrame(m) {
     doc.addEventListener('mousemove', (e) => {
       if (e.timeStamp - lastMove < 40) return;          // at most ~25 checks a second
       lastMove = e.timeStamp;
+      pointer = { x: e.clientX, y: e.clientY };
       if (e.target === btn) { clearTimeout(hideTimer); return; }
       const a = e.target.closest?.('a[href^="mailto:" i]');
       if (a) return showAt(a.getBoundingClientRect(), decodeURIComponent(a.getAttribute('href').slice(7).split('?')[0]));
@@ -1746,7 +1749,7 @@ async function copyAddress(addr) {
   catch { toast('Could not copy'); }
 }
 
-// From / To / Cc with each address on its own: hovering one shows a Copy button for just that address.
+// From / To / Cc with each address on its own; hovering one shows the Copy button just above the pointer.
 function addrLine(fields) {
   const line = el('div', { class: 'addr' });
   fields.filter(([, v]) => v).forEach(([label, value], i) => {
@@ -1754,12 +1757,33 @@ function addrLine(fields) {
     line.append(label + ' ');
     splitAddrs(value).forEach((a, j) => {
       if (j) line.append(', ');
-      const copy = el('button', { type: 'button', class: 'copy-addr', title: 'Copy address' }, 'Copy');
-      copy.addEventListener('click', (e) => { e.stopPropagation(); copyAddress(addrOf(a)); });
-      line.append(el('span', { class: 'addr-item' }, [a, copy]));
+      line.append(el('span', { class: 'addr-item', 'data-addr': addrOf(a) }, a));
     });
   });
   return line;
+}
+
+// One floating Copy button. It's placed just above the pointer when it arrives on an address and then
+// stays put (so the mouse can reach it); it hides shortly after the pointer leaves both.
+function setupCopyFloat() {
+  const btn = el('button', { type: 'button', id: 'copy-float', hidden: '' }, 'Copy');
+  document.body.append(btn);
+  let hideTimer;
+  btn.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+  btn.addEventListener('mouseleave', () => { hideTimer = setTimeout(() => { btn.hidden = true; }, 400); });
+  btn.addEventListener('click', () => { copyAddress(btn.dataset.addr); btn.hidden = true; });
+  document.addEventListener('mousemove', (e) => {
+    const item = e.target.closest?.('.addr-item');
+    if (e.target === btn) return;
+    if (!item) { if (!btn.hidden && !hideTimer) hideTimer = setTimeout(() => { btn.hidden = true; hideTimer = null; }, 500); return; }
+    clearTimeout(hideTimer); hideTimer = null;
+    if (btn.hidden || btn.dataset.addr !== item.dataset.addr) {
+      btn.dataset.addr = item.dataset.addr;
+      btn.hidden = false;
+      btn.style.left = Math.max(4, e.clientX - btn.offsetWidth / 2) + 'px';
+      btn.style.top = Math.max(4, e.clientY - btn.offsetHeight - 8) + 'px';
+    }
+  });
 }
 
 function renderMessage(m, expanded) {
@@ -2375,6 +2399,7 @@ async function start() {
   applyColumnWidth(settings.colWidth);
   applyReaderWidth(settings.readerWidth);
   setupReaderResize();
+  setupCopyFloat();
   show('board');
   if (!state.me) {
     try {

@@ -337,18 +337,23 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 .emoji-pop .tool { width: 36px; min-height: 36px; padding: 0; font-size: 1.15rem; background: transparent; border-color: transparent; }
 .compose .reply-editor { min-height: 280px; }
 
-/* Hover an address in an opened email: a Copy button appears next to it. */
-.addr-item { white-space: nowrap; }
-.addr-item .copy-addr {
-  display: none; margin-left: .3rem; padding: .05rem .45rem; min-height: 0; font-size: .75rem; line-height: 1.4;
-  border-radius: 6px; vertical-align: 1px;
-  background: #fde2e2; border-color: #f3a5a5; color: #8a1c1c;
+/* Hover an address in an opened email: a light red Copy button appears just above the pointer. */
+.addr-item { cursor: default; border-radius: 3px; }
+.addr-item:hover { color: var(--text); background: rgba(243, 165, 165, .18); }
+#copy-float {
+  position: fixed; z-index: 50; padding: .1rem .55rem; min-height: 0; font-size: .78rem; line-height: 1.5;
+  border-radius: 6px; background: #fde2e2; border: 1px solid #f3a5a5; color: #8a1c1c; box-shadow: 0 2px 6px rgba(0,0,0,.25);
 }
-.addr-item .copy-addr:hover { background: #fbcaca; }
-.addr-item:hover .copy-addr, .addr-item:focus-within .copy-addr { display: inline-block; }
-.addr-item:hover { color: var(--text); }
+#copy-float:hover { background: #fbcaca; }
+#copy-float[hidden] { display: none; }
 
 /* Title bar color (Settings): top bar and column headers. Text color is set to match (light or dark). */
 :root { --bar-bg: #373a2b; --bar-text: #eef0e4; --bar-muted: #c3c7b2; }
 .color-row { display: flex; align-items: center; gap: .6rem; }
 .color-row input[type="color"] { width: 64px; height: 40px; padding: 2px 4px; cursor: pointer; }
+
+/* The email (and new message) window's title bar uses the title bar color as well. */
+.reader-head { background: var(--bar-bg); color: var(--bar-text); border-bottom-color: transparent; }
+.reader-head button, .reader-head .icon-btn { color: var(--bar-text); background: transparent; border-color: transparent; }
+.reader-head button:hover:not(:disabled) { background: rgba(127, 127, 127, .22); }
+.reader-head .esc-hint { color: var(--bar-text); border-color: var(--bar-muted); opacity: .8; }
