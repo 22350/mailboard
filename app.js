@@ -1935,7 +1935,8 @@ async function renameLabel(oldName, newName) {
 // Gmail's rules are its filters; they live in Gmail's own settings (opened for the signed-in account).
 function openGmailRules() {
   // Account in the path (/mail/u/<email>/): the ?authuser= form redirects and drops the #settings/filters part.
-  const who = state.me ? `u/${encodeURIComponent(state.me)}/` : 'u/0/';
+  // Gmail wants the address as is (a %40-encoded @ gives a 404).
+  const who = /^[^\s/?#]+@[^\s/?#]+$/.test(state.me || '') ? `u/${state.me}/` : 'u/0/';
   window.open(`https://mail.google.com/mail/${who}#settings/filters`, '_blank', 'noopener');
 }
 
