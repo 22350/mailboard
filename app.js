@@ -2659,7 +2659,10 @@ function onKey(e) {
   // Delete / Backspace: the card under the mouse (highlighted) goes to Trash; else the focused card.
   if ((e.key === 'Delete' || e.key === 'Backspace') && !e.ctrlKey && !e.metaKey && !e.altKey
       && !e.target.closest?.('#reader, [contenteditable]')) {        // never while typing a reply or message
-    const target = document.querySelector('.card:hover') || document.activeElement?.closest?.('.card');
+    // The card under the pointer right now (":hover" lags after the board redraws, e.g. right after
+    // the previous delete moved the next card up under the mouse), else the focused card.
+    const under = state.pointer && document.elementFromPoint(state.pointer.x, state.pointer.y)?.closest('.card');
+    const target = under || document.activeElement?.closest?.('.card');
     if (target) { e.preventDefault(); trashThread(target.dataset.id); return; }
   }
   const card = document.activeElement?.closest?.('.card');
@@ -2818,6 +2821,7 @@ function setupSearchSuggest() {
 
 function wireUi() {
   setupSearchSuggest();
+  document.addEventListener('mousemove', (e) => { state.pointer = { x: e.clientX, y: e.clientY }; }, { passive: true });
   $('#btn-signin').addEventListener('click', signIn);
   $('#banner-btn').addEventListener('click', signIn);
   $('#btn-refresh').addEventListener('click', loadBoard);
