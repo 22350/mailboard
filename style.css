@@ -337,3 +337,12 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 .emoji-pop[hidden] { display: none; }
 .emoji-pop .tool { width: 36px; min-height: 36px; padding: 0; font-size: 1.15rem; background: transparent; border-color: transparent; }
 .compose .reply-editor { min-height: 280px; }
+
+/* Hover an address in an opened email: a Copy button appears next to it. */
+.addr-item { white-space: nowrap; }
+.addr-item .copy-addr {
+  display: none; margin-left: .3rem; padding: .05rem .45rem; min-height: 0; font-size: .75rem; line-height: 1.4;
+  border-radius: 6px; vertical-align: 1px;
+}
+.addr-item:hover .copy-addr, .addr-item:focus-within .copy-addr { display: inline-block; }
+.addr-item:hover { color: var(--text); }

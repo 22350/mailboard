@@ -1658,7 +1658,9 @@ function decodePart(part) {
 
 const FRAME_HEAD = '<!doctype html><meta charset="utf-8"><base target="_blank"><style>' +
   'html,body{margin:0;background:#fff;color:#111;font:15px/1.5 system-ui,sans-serif;overflow-wrap:anywhere}' +
-  'img{max-width:100%;height:auto}table{max-width:100%}</style>';
+  'img{max-width:100%;height:auto}table{max-width:100%}' +
+  '#mb-copy{position:absolute;z-index:9;font:12px system-ui,sans-serif;padding:2px 8px;border:1px solid #bbb;' +
+  'border-radius:6px;background:#fff;color:#111;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.2)}</style>';
 
 function bodyFrame(m) {
   const html = findPart(m.payload, 'text/html');
@@ -1678,6 +1680,23 @@ function bodyFrame(m) {
     if (!doc) return;
     // Keys pressed inside the email body don't reach the app; pass Esc on so it still closes the email.
     doc.addEventListener('keydown', (e) => { if (e.key === 'Escape') onKey({ key: 'Escape', target: frame }); });
+    // Hovering an email link (mailto:) in the message shows a Copy button for that address.
+    const btn = doc.createElement('button');
+    btn.id = 'mb-copy'; btn.textContent = 'Copy'; btn.hidden = true;
+    doc.body.append(btn);
+    let hideTimer;
+    doc.addEventListener('mouseover', (e) => {
+      const a = e.target.closest?.('a[href^="mailto:" i]');
+      if (e.target === btn) { clearTimeout(hideTimer); return; }
+      if (!a) { hideTimer = setTimeout(() => { btn.hidden = true; }, 400); return; }
+      clearTimeout(hideTimer);
+      const r = a.getBoundingClientRect();
+      btn.dataset.addr = decodeURIComponent(a.getAttribute('href').slice(7).split('?')[0]);
+      btn.style.left = (r.right + doc.defaultView.scrollX + 6) + 'px';
+      btn.style.top = (r.top + doc.defaultView.scrollY - 2) + 'px';
+      btn.hidden = false;
+    });
+    btn.addEventListener('click', (e) => { e.preventDefault(); copyAddress(btn.dataset.addr); btn.hidden = true; });
     const fit = () => { frame.style.height = doc.documentElement.scrollHeight + 'px'; };
     fit();
     new ResizeObserver(fit).observe(doc.body);
@@ -1699,6 +1718,27 @@ async function downloadAttachment(msgId, part) {
   }
 }
 
+async function copyAddress(addr) {
+  try { await navigator.clipboard.writeText(addr); toast(`Copied ${addr}`); }
+  catch { toast('Could not copy'); }
+}
+
+// From / To / Cc with each address on its own: hovering one shows a Copy button for just that address.
+function addrLine(fields) {
+  const line = el('div', { class: 'addr' });
+  fields.filter(([, v]) => v).forEach(([label, value], i) => {
+    if (i) line.append(' · ');
+    line.append(label + ' ');
+    splitAddrs(value).forEach((a, j) => {
+      if (j) line.append(', ');
+      const copy = el('button', { type: 'button', class: 'copy-addr', title: 'Copy address' }, 'Copy');
+      copy.addEventListener('click', (e) => { e.stopPropagation(); copyAddress(addrOf(a)); });
+      line.append(el('span', { class: 'addr-item' }, [a, copy]));
+    });
+  });
+  return line;
+}
+
 function renderMessage(m, expanded) {
   const from = header(m, 'from');
   const to = header(m, 'to');
@@ -1714,7 +1754,7 @@ function renderMessage(m, expanded) {
   const load = () => {
     if (loaded) return;
     loaded = true;
-    details.append(el('div', { class: 'addr' }, `From ${from}` + (to ? ` · To ${to}` : '') + (cc ? ` · Cc ${cc}` : '')));
+    details.append(addrLine([['From', from], ['To', to], ['Cc', cc]]));
     details.append(bodyFrame(m));
     const files = attachmentsOf(m.payload);
     if (files.length) {
