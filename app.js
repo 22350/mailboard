@@ -198,9 +198,18 @@ async function mapLimit(items, limit, fn) {
 const USUAL_ORDER = ['To Do', 'Waiting', 'Done'];
 async function adoptColumns() {
   const { labels = [] } = await api('/labels');
-  const names = labels.map((l) => l.name)
-    .filter((n) => n.startsWith(LABEL_PREFIX) && !n.startsWith(COLOR_PREFIX))
-    .map((n) => n.slice(LABEL_PREFIX.length)).filter((n) => n && !n.includes('/'));
+  const board = labels.filter((l) => l.name.startsWith(LABEL_PREFIX) && !l.name.startsWith(COLOR_PREFIX)
+    && l.name.length > LABEL_PREFIX.length && !l.name.slice(LABEL_PREFIX.length).includes('/'));
+  // Old To Do / Waiting / Done labels left from the first-version defaults: skip them if they're empty.
+  const kept = [];
+  for (const l of board) {
+    const n = l.name.slice(LABEL_PREFIX.length);
+    if (USUAL_ORDER.includes(n)) {
+      try { if ((await api(`/labels/${l.id}`)).threadsTotal === 0) continue; } catch {}
+    }
+    kept.push(n);
+  }
+  const names = kept;
   const rank = (n) => { const i = USUAL_ORDER.indexOf(n); return i < 0 ? USUAL_ORDER.length : i; };
   names.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b, undefined, { sensitivity: 'base' }));
   settings.columns = names.slice(0, 8);
@@ -1634,10 +1643,22 @@ function saveColumnList(list) {
   loadBoard();
 }
 
-function removeColumn(i) {
+async function removeColumn(i) {
   const before = [...settings.columns];
   const name = before[i - 1];
+  const id = state.labelIds[name];
   saveColumnList(before.filter((_, k) => k !== i - 1));
+  // An empty column's label is deleted too, so nothing is left behind in Gmail; one with emails keeps it.
+  let empty = false;
+  try { empty = id && (await api(`/labels/${id}`)).threadsTotal === 0; } catch {}
+  if (empty) {
+    try {
+      await api(`/labels/${id}`, { method: 'DELETE' });
+      delete state.labelIds[name];
+      toast(`Removed “${name}” and its empty Gmail label.`, { label: 'Undo', run: () => saveColumnList(before) });
+      return;
+    } catch {}
+  }
   toast(`Removed “${name}”. Its emails keep the label in Gmail.`, { label: 'Undo', run: () => saveColumnList(before) });
 }
 
