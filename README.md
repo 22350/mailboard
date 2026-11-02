@@ -17,7 +17,7 @@ shows the same sorting.
    - `http://localhost:8090`
    - `https://22350.github.io`
    Leave redirect URIs empty. Copy the **Client ID**.
-5. Open StediMail (https://stedimail.com), paste the Client ID, sign in. Google warns the app is
+5. On https://stedimail.com the Client ID is built in: just sign in. For your own copy, paste your Client ID, then sign in. Google warns the app is
    unverified — that's expected for your own app (Continue).
 
 ## Run locally

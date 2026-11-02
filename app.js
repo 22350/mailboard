@@ -40,8 +40,15 @@ const store = {
   set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} },
 };
 
+// StediMail's own Google sign-in client, used on stedimail.com (and when testing locally), so testers just
+// click Sign in. A Client ID isn't a secret. Anyone hosting their own copy pastes theirs (see README).
+const BUILT_IN_CLIENT_ID = '922000608082-id99bt36apvi1fond3n02uialhdlvcg0.apps.googleusercontent.com';
+function builtInClientId() {
+  return ['stedimail.com', 'www.stedimail.com', 'localhost', '127.0.0.1'].includes(location.hostname) ? BUILT_IN_CLIENT_ID : '';
+}
+
 const settings = {
-  clientId: store.get('clientId', ''),
+  clientId: store.get('clientId', '') || builtInClientId(),
   inboxName: store.get('inboxName', 'Inbox'),
   // A new user starts with just the Inbox: no columns, so no labels are added to their Gmail until they
   // make a column themselves. Someone who already has StediMail labels (new browser or new address)
