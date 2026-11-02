@@ -55,10 +55,16 @@ const settings = {
   // gets those back instead; see adoptColumns().
   columns: store.get('columns', []),
   columnsSaved: store.get('columns', null) !== null,
+  // Columns that show one of the person's own Gmail labels (column name → that label's full name).
+  // Every other column is StediMail's own label "Board/<name>".
+  columnLabels: store.get('columnLabels', {}),
   colWidth: store.get('colWidth', null),   // px shared by all columns; null = automatic
   readerWidth: store.get('readerWidth', null),
   barColor: store.get('barColor', null),   // title bar color (#rrggbb); null = default olive   // px for the opened-email panel; null = normal (760)
 };
+
+function labelNameOf(col) { return settings.columnLabels[col] || LABEL_PREFIX + col; }
+function isOwnLabel(col) { return !!settings.columnLabels[col]; }
 
 function columns() {
   const cols = [{ name: settings.inboxName, inbox: true }];
@@ -215,6 +221,50 @@ async function adoptColumns() {
   settings.columns = names.slice(0, 8);
   settings.columnsSaved = true;
   store.set('columns', settings.columns);
+  // Nothing from StediMail yet: ask which of their own labels should be columns (none chosen for them).
+  if (!settings.columns.length && ownLabelChoices(labels).length) state.pickLabels = ownLabelChoices(labels);
+}
+
+// The person's own labels that could be columns (not Gmail's system labels or StediMail's own).
+function ownLabelChoices(labels) {
+  return labels.filter((l) => l.type === 'user' && !l.name.startsWith(LABEL_PREFIX) && !l.name.startsWith('Mailboard/')
+      && l.name !== 'Mailboard' && l.name !== SNOOZE_FLAG)
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+}
+
+const MAX_COLUMNS = 8;
+function showLabelPicker(labels) {
+  const dlg = el('dialog', { class: 'pick-labels', 'aria-label': 'Choose columns' });
+  const boxes = labels.map((l) => {
+    const cb = el('input', { type: 'checkbox', value: l.name });
+    return { cb, row: el('label', { class: 'pick-row' }, [cb, el('span', {}, l.name)]) };
+  });
+  const count = el('p', { class: 'hint' });
+  const update = () => {
+    const n = boxes.filter((b) => b.cb.checked).length;
+    boxes.forEach((b) => { b.cb.disabled = !b.cb.checked && n >= MAX_COLUMNS; });
+    count.textContent = n ? `${n} chosen (up to ${MAX_COLUMNS}).` : `Choose up to ${MAX_COLUMNS}, or none.`;
+  };
+  boxes.forEach((b) => b.cb.addEventListener('change', update));
+  const use = el('button', { type: 'button', class: 'primary' }, 'Use these');
+  const skip = el('button', { type: 'button' }, 'Not now');
+  dlg.append(
+    el('h2', {}, 'Which of your labels should be columns?'),
+    el('p', {}, 'Each column shows the emails with that label. Moving an email to another column moves its label. '
+      + 'StediMail doesn\u2019t add anything to your Gmail. You can add or remove columns any time.'),
+    el('div', { class: 'pick-list' }, boxes.map((b) => b.row)),
+    count,
+    el('div', { class: 'pick-buttons' }, [skip, use]));
+  use.addEventListener('click', () => {
+    const chosen = boxes.filter((b) => b.cb.checked).map((b) => b.cb.value);
+    dlg.close(); dlg.remove();
+    for (const name of chosen) settings.columnLabels[name] = name;
+    saveColumnList([...settings.columns, ...chosen]);
+  });
+  skip.addEventListener('click', () => { dlg.close(); dlg.remove(); });
+  document.body.append(dlg);
+  update();
+  dlg.showModal();
 }
 
 async function ensureLabels(cols) {
@@ -225,12 +275,13 @@ async function ensureLabels(cols) {
     .map((l) => ({ id: l.id, name: l.name, due: snoozeDue(l.name) })).filter((l) => l.due);
   state.snoozeIds = new Set(state.snoozeLabels.map((l) => l.id));
   state.snoozeFlagId = labels.find((l) => l.name === SNOOZE_FLAG)?.id || null;
+  state.allUserLabels = ownLabelChoices(labels);
   state.userLabels = labels
     .filter((l) => l.type === 'user' && !l.name.startsWith(LABEL_PREFIX) && !l.name.startsWith('Mailboard/') && l.name !== 'Mailboard' && l.name !== SNOOZE_FLAG)
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   for (const col of cols) {
     if (col.inbox) continue;
-    const name = LABEL_PREFIX + col.name;
+    const name = labelNameOf(col.name);
     if (!byName[name]) {
       const made = await api('/labels', {
         method: 'POST',
@@ -553,7 +604,7 @@ function columnScope(key) {
   const cols = columns();
   const col = cols[key];
   if (col.inbox) {
-    const others = cols.slice(1).map((c) => `-label:${searchLabel(LABEL_PREFIX + c.name)}`).join(' ');
+    const others = cols.slice(1).map((c) => `-label:${searchLabel(labelNameOf(c.name))}`).join(' ');
     return { q: `in:inbox ${others}`.trim(), name: col.name };
   }
   return { labelIds: state.labelIds[col.name], name: col.name };
@@ -1108,6 +1159,7 @@ async function loadBoard() {
   setStatus('Loading…');
   try {
     if (!settings.columnsSaved) await adoptColumns();
+    if (state.pickLabels) { const l = state.pickLabels; state.pickLabels = null; setTimeout(() => showLabelPicker(l), 0); }
     const cols = columns();
     await ensureLabels(cols);
     await wakeDueSnoozes();
@@ -1196,7 +1248,10 @@ async function archiveThread(id) {
   const cols = columns();
   const t = state.threads.get(id);
   if (!t) return;
-  const remove = ['INBOX', ...cols.slice(1).map((c) => state.labelIds[c.name])].filter((l) => t.labels.has(l));
+  // StediMail's own column labels come off; the person's own labels stay (Gmail's Archive keeps labels too).
+  const remove = ['INBOX', ...cols.slice(1).filter((c) => !isOwnLabel(c.name)).map((c) => state.labelIds[c.name])]
+    .filter((l) => t.labels.has(l));
+  const keptIn = cols.slice(1).find((c) => isOwnLabel(c.name) && t.labels.has(state.labelIds[c.name]));
   const apply = async (add, rem) => {
     add.forEach((l) => t.labels.add(l));
     rem.forEach((l) => t.labels.delete(l));
@@ -1206,7 +1261,7 @@ async function archiveThread(id) {
   };
   try {
     await apply([], remove);
-    toast('Archived', { label: 'Undo', run: () => apply(remove, []).catch((e) => toast(e.message)) });
+    toast(keptIn ? `Archived. It keeps your “${keptIn.name}” label, so it stays in that column.` : 'Archived', { label: 'Undo', run: () => apply(remove, []).catch((e) => toast(e.message)) });
   } catch (e) {
     if (!(e instanceof AuthError)) toast('Could not archive: ' + e.message);
   }
@@ -1637,6 +1692,8 @@ function openColumnPicker() {
 function saveColumnList(list) {
   settings.columns = list;
   settings.columnsSaved = true;
+  settings.columnLabels = Object.fromEntries(Object.entries(settings.columnLabels).filter(([k]) => list.includes(k)));
+  store.set('columnLabels', settings.columnLabels);
   store.set('columns', list);
   assign(columns());
   render();
@@ -1647,27 +1704,36 @@ async function removeColumn(i) {
   const before = [...settings.columns];
   const name = before[i - 1];
   const id = state.labelIds[name];
+  const own = isOwnLabel(name);
+  const beforeLabels = { ...settings.columnLabels };
+  const undo = () => { settings.columnLabels = beforeLabels; saveColumnList(before); };
   saveColumnList(before.filter((_, k) => k !== i - 1));
-  // An empty column's label is deleted too, so nothing is left behind in Gmail; one with emails keeps it.
+  if (own) {               // one of their own labels: it stays exactly as it was in Gmail
+    toast(`Removed the “${name}” column. Your label is unchanged.`, { label: 'Undo', run: undo });
+    return;
+  }
+  // An empty StediMail column's label is deleted too, so nothing is left behind; one with emails keeps it.
   let empty = false;
   try { empty = id && (await api(`/labels/${id}`)).threadsTotal === 0; } catch {}
   if (empty) {
     try {
       await api(`/labels/${id}`, { method: 'DELETE' });
       delete state.labelIds[name];
-      toast(`Removed “${name}” and its empty Gmail label.`, { label: 'Undo', run: () => saveColumnList(before) });
+      toast(`Removed “${name}” and its empty Gmail label.`, { label: 'Undo', run: undo });
       return;
     } catch {}
   }
-  toast(`Removed “${name}”. Its emails keep the label in Gmail.`, { label: 'Undo', run: () => saveColumnList(before) });
+  toast(`Removed “${name}”. Its emails keep the label in Gmail.`, { label: 'Undo', run: undo });
 }
 
 function addColumn(name) {
   const existing = [settings.inboxName, ...settings.columns].map((n) => n.toLowerCase());
   if (existing.includes(name.toLowerCase())) { toast('There is already a column with that name.'); return; }
   if (existing.length >= 9) { toast('Nine columns at most.'); return; }
+  const own = (state.allUserLabels || []).find((l) => l.name.toLowerCase() === name.toLowerCase());
+  if (own) settings.columnLabels[own.name] = own.name;
   const list = [...settings.columns];
-  list.push(name);
+  list.push(own ? own.name : name);
   saveColumnList(list);
 }
 
@@ -1678,13 +1744,19 @@ function renderAddColumn() {
     first ? '+ Add a column' : '+');
   plus.addEventListener('click', () => {
     state.addingColumn = true;
-    const input = el('input', { placeholder: 'New column name', 'aria-label': 'New column name' });
+    const input = el('input', { placeholder: 'New column, or one of your labels', 'aria-label': 'New column name, or one of your labels',
+      list: 'own-label-list' });
+    const taken = new Set(settings.columns.map((n) => labelNameOf(n)));
+    const options = el('datalist', { id: 'own-label-list' },
+      (state.allUserLabels || []).filter((l) => !taken.has(l.name)).map((l) => el('option', { value: l.name })));
     let finished = false;
     const finish = (save) => {
       if (finished) return;
       finished = true;
       state.addingColumn = false;
-      const name = input.value.replace(/\//g, '-').trim();
+      const typed = input.value.trim();
+      const own = (state.allUserLabels || []).some((l) => l.name.toLowerCase() === typed.toLowerCase());
+      const name = own ? typed : typed.replace(/\//g, '-');
       if (save && name) addColumn(name); else render();
     };
     input.addEventListener('keydown', (e) => {
@@ -1692,7 +1764,7 @@ function renderAddColumn() {
       if (e.key === 'Escape') finish(false);
     });
     input.addEventListener('blur', () => finish(true));
-    tile.replaceChildren(input);
+    tile.replaceChildren(input, options);
     input.focus();
   });
   tile.append(plus);
@@ -2663,7 +2735,7 @@ function openSettings() {
 // Read and check the form; returns { error } or the new settings.
 function readSettingsForm() {
   const rows = [...$('#set-columns').querySelectorAll('input')].map((i) => ({
-    name: i.value.replace(/\//g, '-').trim(),
+    name: isOwnLabel(i.dataset.orig) ? i.value.trim() : i.value.replace(/\//g, '-').trim(),
     orig: i.dataset.orig,
   }));
   const [inbox, ...rest] = rows;
@@ -2687,10 +2759,16 @@ async function renameLabel(oldName, newName) {
   let id = state.labelIds[oldName];
   if (!id) {
     const { labels = [] } = await api('/labels');
-    id = labels.find((l) => l.name === LABEL_PREFIX + oldName)?.id;
+    id = labels.find((l) => l.name === labelNameOf(oldName))?.id;
+  }
+  const own = isOwnLabel(oldName);
+  if (id) await api(`/labels/${id}`, { method: 'PATCH', body: { name: own ? newName : LABEL_PREFIX + newName } });
+  if (own) {
+    delete settings.columnLabels[oldName];
+    settings.columnLabels[newName] = newName;
+    store.set('columnLabels', settings.columnLabels);
   }
   if (!id) return; // label was never created, so there is nothing to carry over
-  await api(`/labels/${id}`, { method: 'PATCH', body: { name: LABEL_PREFIX + newName } });
   delete state.labelIds[oldName];
   state.labelIds[newName] = id;
 }
