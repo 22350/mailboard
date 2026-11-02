@@ -43,7 +43,11 @@ const store = {
 const settings = {
   clientId: store.get('clientId', ''),
   inboxName: store.get('inboxName', 'Inbox'),
-  columns: store.get('columns', ['To Do', 'Waiting', 'Done']),
+  // A new user starts with just the Inbox: no columns, so no labels are added to their Gmail until they
+  // make a column themselves. Someone who already has StediMail labels (new browser or new address)
+  // gets those back instead; see adoptColumns().
+  columns: store.get('columns', []),
+  columnsSaved: store.get('columns', null) !== null,
   colWidth: store.get('colWidth', null),   // px shared by all columns; null = automatic
   readerWidth: store.get('readerWidth', null),
   barColor: store.get('barColor', null),   // title bar color (#rrggbb); null = default olive   // px for the opened-email panel; null = normal (760)
@@ -180,6 +184,21 @@ async function mapLimit(items, limit, fn) {
   let next = 0;
   const worker = async () => { while (next < items.length) await fn(items[next++]); };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+// First load in this browser: if Gmail already has board labels ("Board/<name>") from using StediMail
+// elsewhere, show those as the columns; otherwise start with none. Never creates a label.
+const USUAL_ORDER = ['To Do', 'Waiting', 'Done'];
+async function adoptColumns() {
+  const { labels = [] } = await api('/labels');
+  const names = labels.map((l) => l.name)
+    .filter((n) => n.startsWith(LABEL_PREFIX) && !n.startsWith(COLOR_PREFIX))
+    .map((n) => n.slice(LABEL_PREFIX.length)).filter((n) => n && !n.includes('/'));
+  const rank = (n) => { const i = USUAL_ORDER.indexOf(n); return i < 0 ? USUAL_ORDER.length : i; };
+  names.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  settings.columns = names.slice(0, 8);
+  settings.columnsSaved = true;
+  store.set('columns', settings.columns);
 }
 
 async function ensureLabels(cols) {
@@ -1072,6 +1091,7 @@ async function loadBoard() {
   state.loading = true;
   setStatus('Loading…');
   try {
+    if (!settings.columnsSaved) await adoptColumns();
     const cols = columns();
     await ensureLabels(cols);
     await wakeDueSnoozes();
@@ -1600,6 +1620,7 @@ function openColumnPicker() {
 
 function saveColumnList(list) {
   settings.columns = list;
+  settings.columnsSaved = true;
   store.set('columns', list);
   assign(columns());
   render();
@@ -1607,7 +1628,6 @@ function saveColumnList(list) {
 }
 
 function removeColumn(i) {
-  if (settings.columns.length <= 1) { toast('Keep at least one column besides your inbox.'); return; }
   const before = [...settings.columns];
   const name = before[i - 1];
   saveColumnList(before.filter((_, k) => k !== i - 1));
@@ -1625,7 +1645,9 @@ function addColumn(name) {
 
 function renderAddColumn() {
   const tile = el('div', { class: 'add-column' });
-  const plus = el('button', { class: 'add-btn', title: 'Add column', 'aria-label': 'Add column' }, '+');
+  const first = settings.columns.length === 0;
+  const plus = el('button', { class: 'add-btn' + (first ? ' first' : ''), title: 'Add column', 'aria-label': first ? 'Add your first column' : 'Add column' },
+    first ? '+ Add a column' : '+');
   plus.addEventListener('click', () => {
     state.addingColumn = true;
     const input = el('input', { placeholder: 'New column name', 'aria-label': 'New column name' });
@@ -1646,6 +1668,8 @@ function renderAddColumn() {
     input.focus();
   });
   tile.append(plus);
+  if (first) tile.append(el('p', { class: 'add-hint' },
+    'Columns sort your email, like To Do or Waiting. Each one is a Gmail label, made only when you add it.'));
   return tile;
 }
 
@@ -2617,7 +2641,6 @@ function readSettingsForm() {
   const [inbox, ...rest] = rows;
   const cols = rest.filter((r) => r.name);
   const names = [inbox.name || settings.inboxName, ...cols.map((r) => r.name)];
-  if (!cols.length) return { error: 'Keep at least one column besides your inbox.' };
   if (names.length > 9) return { error: 'Nine columns at most.' };
   if (new Set(names.map((n) => n.toLowerCase())).size !== names.length) return { error: 'Two columns have the same name.' };
   return {
