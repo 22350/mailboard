@@ -1,6 +1,6 @@
 'use strict';
 
-// Mailboard: Gmail as Kanban columns. Runs entirely in the browser; each
+// StediMail (formerly Mailboard): Gmail as Kanban columns. Runs entirely in the browser; each
 // column (other than Inbox) is a Gmail label named "Board/<column>".
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -2548,7 +2548,7 @@ function columnRow(name, orig, isInbox) {
 
 // Apps Script helper (runs in the user's own Google account every 5 minutes): wakes Mailboard-snoozed
 // emails on time even when Mailboard is closed. Same label format as snoozeName()/snoozeDue().
-const SNOOZE_SCRIPT = `// Mailboard snooze helper: brings snoozed emails back to the Inbox on time.
+const SNOOZE_SCRIPT = `// StediMail snooze helper: brings snoozed emails back to the Inbox on time.
 // Run "install" once (allow access when asked). It then checks every 5 minutes.
 const PREFIX = 'Mailboard/Snooze/';
 const FLAG = 'Mailboard Snoozed';
@@ -2968,13 +2968,13 @@ async function checkForUpdate() {
     if (canReloadQuietly()) { location.reload(); return; }
     if (!updateOffered) {
       updateOffered = true;
-      toast('Mailboard was updated.', { label: 'Reload', run: () => location.reload() });
+      toast('StediMail was updated.', { label: 'Reload', run: () => location.reload() });
     }
   } catch {} // offline or Pages hiccup: try again next time
 }
 
 function watchForUpdates() {
-  // The service worker is what lets the browser offer "Install Mailboard".
+  // The service worker is what lets the browser offer "Install StediMail".
   navigator.serviceWorker?.register('sw.js').catch(() => {});
   if (!VERSION) return;
   setInterval(checkForUpdate, 5 * 60 * 1000);

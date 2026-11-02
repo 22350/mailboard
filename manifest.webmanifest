@@ -1,6 +1,6 @@
 {
-  "name": "Mailboard",
-  "short_name": "Mailboard",
+  "name": "StediMail",
+  "short_name": "StediMail",
   "description": "Gmail as a Kanban board. Runs in your browser; your mail never leaves Google and you.",
   "id": "./",
   "start_url": "./",

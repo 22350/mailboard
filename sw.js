@@ -1,6 +1,6 @@
 'use strict';
 
-// Makes Mailboard installable and shows the last-seen page when offline.
+// Makes StediMail installable and shows the last-seen page when offline.
 // Always network-first, so new versions load as soon as they're deployed.
 // Only the app page itself is cached; Gmail data never touches this cache.
 

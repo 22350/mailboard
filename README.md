@@ -1,4 +1,4 @@
-# Mailboard
+# StediMail (formerly Mailboard)
 
 Gmail as Kanban columns, in the browser. Static files only — no server.
 Columns other than Inbox are Gmail labels under `Board/`, so plain Gmail
@@ -6,10 +6,10 @@ shows the same sorting.
 
 ## One-time Google setup
 
-1. Go to https://console.cloud.google.com → create a project called "Mailboard".
+1. Go to https://console.cloud.google.com → create a project called "StediMail".
 2. **APIs & Services → Library** → search "Gmail API" → **Enable**.
 3. **Google Auth Platform** (OAuth consent screen) → Get started:
-   - App name: Mailboard; support email: your Gmail. Audience: **External**.
+   - App name: StediMail; support email: your Gmail. Audience: **External**.
    - **Audience → Test users** → add your Gmail address.
    - **Data access → Add scopes** → `https://www.googleapis.com/auth/gmail.modify`.
 4. **Clients → Create client** → type **Web application**.
@@ -17,7 +17,7 @@ shows the same sorting.
    - `http://localhost:8090`
    - `https://22350.github.io`
    Leave redirect URIs empty. Copy the **Client ID**.
-5. Open Mailboard, paste the Client ID, sign in. Google warns the app is
+5. Open StediMail (https://stedimail.com), paste the Client ID, sign in. Google warns the app is
    unverified — that's expected for your own app (Continue).
 
 ## Run locally

@@ -4,19 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; connect-src 'self' https://gmail.googleapis.com https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; img-src * data: blob:; font-src * data:; media-src *">
-<title>Mailboard</title>
+<title>StediMail</title>
 <meta name="theme-color" content="#373a2b">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="style.css?v=20261101153941">
+<link rel="stylesheet" href="style.css?v=20261102151929">
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="app.js?v=20261101153941" defer></script>
+<script src="app.js?v=20261102151929" defer></script>
 </head>
 <body>
 <header class="bar">
   <button id="btn-menu" class="menu-btn" title="Show or hide folders" aria-label="Show or hide folders" hidden>☰</button>
-  <h1>Mailboard</h1>
+  <h1>StediMail</h1>
   <form id="search-form" class="search-box" role="search" hidden>
     <input id="search" type="search" placeholder="Search mail" autocomplete="off">
   </form>
@@ -68,7 +68,7 @@
     </div>
     <div class="field">
       <span>Snooze on time (optional)</span>
-      <p class="hint">Mailboard brings snoozed emails back whenever it's open. To have them come back on time even when it's closed (e.g. on your phone): click <b>Copy helper script</b>, open <b>Google Apps Script</b>, make a new project, paste over everything, save, then choose <b>install</b> in the toolbar and click <b>Run</b> (allow access when Google asks). Once is enough.</p>
+      <p class="hint">StediMail brings snoozed emails back whenever it's open. To have them come back on time even when it's closed (e.g. on your phone): click <b>Copy helper script</b>, open <b>Google Apps Script</b>, make a new project, paste over everything, save, then choose <b>install</b> in the toolbar and click <b>Run</b> (allow access when Google asks). Once is enough.</p>
       <div class="color-row"><button type="button" id="set-snooze-copy">Copy helper script</button><a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener">Open Google Apps Script</a></div>
     </div>
     <div class="field">
