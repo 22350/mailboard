@@ -2637,7 +2637,7 @@ function isBulk(m) {
 }
 function unsubscribeOf(msgs) {
   for (const m of [...msgs].reverse()) {
-    if (!isBulk(m)) continue;
+    const bulk = isBulk(m);
     const list = header(m, 'list-unsubscribe');
     const links = [...list.matchAll(/<([^>]+)>/g)].map((x) => x[1].trim());
     const web = links.find((u) => /^https:\/\//i.test(u));
@@ -2647,25 +2647,28 @@ function unsubscribeOf(msgs) {
     }
     // No header: the unsubscribe link the law makes them put in the email itself (Paul: "unsubscribe at
     // the bottom of the email is required").
-    const inBody = unsubscribeInBody(m);
+    // Not marked as mass mail (Gmail's tabs off, or an "account notice" like Delta's): an actual
+    // "Unsubscribe" link in the email is itself the sign of a company's email (Paul, 2026-11-03).
+    const inBody = unsubscribeInBody(m, !bulk);
     if (inBody) return { from: header(m, 'from'), web: inBody, oneClick: false };
   }
   return null;
 }
 const UNSUB_WORDS = /unsubscri|opt[\s-]?out|email preferences|manage (?:your )?(?:subscription|preferences|email)/i;
-function unsubscribeInBody(m) {
+function unsubscribeInBody(m, strict = false) {
   const html = findPart(m.payload, 'text/html');
   if (html) {
     const doc = new DOMParser().parseFromString(decodePart(html), 'text/html');
     const links = [...doc.querySelectorAll('a[href^="http"]')];
     // Best: the words in the link's text; then in its address; the last such link (footers are at the end).
-    const byText = links.filter((a) => UNSUB_WORDS.test(a.textContent || '') || UNSUB_WORDS.test(a.title || ''));
-    const byHref = links.filter((a) => /unsub|optout|opt-out/i.test(a.getAttribute('href')));
+    const words = strict ? /unsubscri/i : UNSUB_WORDS;     // strict: the link itself says "unsubscribe"
+    const byText = links.filter((a) => words.test(a.textContent || '') || words.test(a.title || ''));
+    const byHref = strict ? [] : links.filter((a) => /unsub|optout|opt-out/i.test(a.getAttribute('href')));
     const a = byText.pop() || byHref.pop();
     if (a) return a.getAttribute('href');
   }
   const text = findPart(m.payload, 'text/plain');
-  if (text) {
+  if (text && !strict) {
     const t = decodePart(text);
     const near = [...t.matchAll(/https?:\/\/[^\s<>")]+/g)].filter((x) =>
       UNSUB_WORDS.test(t.slice(Math.max(0, x.index - 80), x.index + x[0].length)) || /unsub|optout/i.test(x[0]));
