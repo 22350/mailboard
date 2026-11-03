@@ -1107,6 +1107,78 @@ async function renameUserLabel(l) {
   if (wasShowing) state.folder = name;
 }
 
+// ---------- Report issue: a tester's bug report or request, sent from their own Gmail ----------
+// Goes to the beta address (forwarded to Paul). Shows exactly what is sent before sending; no email
+// content is ever included, only what the tester types and the technical details listed.
+const REPORT_TO = 'beta@stedimail.com';
+const recentErrors = [];
+window.addEventListener('error', (e) => { recentErrors.push(`${new Date().toISOString()} ${e.message} (${(e.filename || '').split('/').pop()}:${e.lineno})`); recentErrors.splice(0, recentErrors.length - 10); });
+window.addEventListener('unhandledrejection', (e) => { recentErrors.push(`${new Date().toISOString()} ${e.reason?.message || e.reason}`); recentErrors.splice(0, recentErrors.length - 10); });
+
+function appVersion() {
+  return document.querySelector('script[src^="app.js"]')?.getAttribute('src').split('v=')[1] || 'unknown';
+}
+
+function reportDetails() {
+  return [
+    `StediMail version: ${appVersion()}`,
+    `Address: ${location.origin}`,
+    `Browser: ${navigator.userAgent}`,
+    `Screen: ${screen.width}×${screen.height}, window ${innerWidth}×${innerHeight}, zoom ${Math.round(devicePixelRatio * 100)}%`,
+    `Columns: ${settings.columns.length} (${settings.columns.filter(isOwnLabel).length} of them your own labels)`,
+    `Time: ${new Date().toString()}`,
+    `Recent errors: ${recentErrors.length ? '\n  ' + recentErrors.join('\n  ') : 'none'}`,
+  ].join('\n');
+}
+
+function openReport() {
+  const dlg = el('dialog', { class: 'report', 'aria-label': 'Report issue' });
+  let kind = null;
+  const close = () => { dlg.close(); dlg.remove(); };
+  const choose = () => {
+    const wrong = el('button', { type: 'button', class: 'big-choice' }, 'Something’s wrong');
+    const want = el('button', { type: 'button', class: 'big-choice' }, 'I have a request');
+    const cancel = el('button', { type: 'button' }, 'Cancel');
+    wrong.addEventListener('click', () => { kind = 'issue'; write(); });
+    want.addEventListener('click', () => { kind = 'request'; write(); });
+    cancel.addEventListener('click', close);
+    dlg.replaceChildren(el('h2', {}, 'Report issue'), el('div', { class: 'big-choices' }, [wrong, want]),
+      el('div', { class: 'ask-buttons' }, [cancel]));
+  };
+  const write = () => {
+    const text = el('textarea', { rows: '6', 'aria-label': kind === 'issue' ? 'What went wrong' : 'What you would like',
+      placeholder: kind === 'issue' ? 'What happened, and what did you expect? (Voice typing works here.)'
+        : 'What would you like StediMail to do? (Voice typing works here.)' });
+    const details = reportDetails();
+    const show = el('details', {}, [el('summary', {}, 'What else is sent (no emails are included)'),
+      el('pre', {}, `To: ${REPORT_TO}\nFrom: your Gmail${state.me ? ' (' + state.me + ')' : ''}\n\n${details}`)]);
+    const back = el('button', { type: 'button' }, 'Back');
+    const send = el('button', { type: 'button', class: 'primary' }, 'Send');
+    back.addEventListener('click', choose);
+    send.addEventListener('click', async () => {
+      const said = text.value.trim();
+      if (!said) { text.focus(); toast('Please say what happened first.'); return; }
+      send.disabled = true; send.textContent = 'Sending…';
+      const subject = `[StediMail ${kind}] ${said.split(/\s+/).slice(0, 8).join(' ')}${said.split(/\s+/).length > 8 ? '…' : ''}`;
+      try {
+        await sendMail({ To: REPORT_TO, Subject: subject }, `${said}\n\n---\n${details}\n`);
+        close();
+        toast('Sent. Thank you!');
+      } catch (e) {
+        send.disabled = false; send.textContent = 'Send';
+        if (!(e instanceof AuthError)) toast('Could not send: ' + e.message);
+      }
+    });
+    dlg.replaceChildren(el('h2', {}, kind === 'issue' ? 'Something’s wrong' : 'I have a request'), text, show,
+      el('div', { class: 'ask-buttons' }, [back, send]));
+    text.focus();
+  };
+  dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
+  document.body.append(dlg);
+  choose();
+  dlg.showModal();
+}
+
 // Yes/no for things that can't be undone. Not the browser's confirm(): there OK has the focus, so a stray
 // or repeated Enter/Space (a shaky key press, a voice-typing key) says yes before it's read. Here Cancel
 // has the focus, the OK button only works after ARM_MS, and Esc or a click outside cancels.
@@ -1704,7 +1776,7 @@ function show(view) {
   $('#main-row').hidden = view !== 'board';
   $('#signin').hidden = view !== 'signin';
   $('#setup').hidden = view !== 'setup';
-  for (const id of ['btn-compose', 'btn-refresh', 'search-form', 'btn-menu', 'col-picker']) $('#' + id).hidden = view !== 'board';
+  for (const id of ['btn-compose', 'btn-refresh', 'search-form', 'btn-menu', 'col-picker', 'btn-report']) $('#' + id).hidden = view !== 'board';
   $('#sidebar').hidden = !state.sidebarOpen;
   if (view === 'board') renderSidebar();
 }
@@ -3069,6 +3141,7 @@ function wireUi() {
   $('#banner-btn').addEventListener('click', signIn);
   $('#btn-refresh').addEventListener('click', loadBoard);
   $('#btn-compose').addEventListener('click', () => openCompose());
+  $('#btn-report').addEventListener('click', openReport);
   $('#btn-menu').addEventListener('click', () => setSidebar(!state.sidebarOpen));
   $('#search-form').addEventListener('submit', (e) => { e.preventDefault(); runSearch($('#search').value); });
   $('#search').addEventListener('keydown', (e) => { if (e.key === 'Escape') clearSearch(); });
