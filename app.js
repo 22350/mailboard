@@ -29,6 +29,10 @@ const COLORS = [
 ];
 const REFRESH_MS = 2 * 60 * 1000;
 const WATCH_MS = 15 * 1000;
+const RENEW_BEFORE_MS = 5 * 60 * 1000;
+const RENEW_EVERY_MS = 4 * 60 * 1000;
+const RENEW_IDLE_MS = 30 * 1000;
+const RENEW_LAST_MS = 60 * 1000;
 
 const $ = (sel) => document.querySelector(sel);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -99,6 +103,9 @@ const state = {
   openId: null,
   dragging: false,
   watchedHistory: null, // mailbox history number at the last check for new mail
+  renewing: false,     // a quiet sign-in renewal is under way
+  lastRenew: 0,
+  lastInput: 0,        // last key, click, scroll or mouse move in this window
   loading: false,
   lastLoad: 0,
 };
@@ -125,13 +132,19 @@ function initAuth() {
     client_id: settings.clientId,
     scope: SCOPE,
     callback: (resp) => {
-      if (resp.error) { toast('Sign-in failed: ' + resp.error); return; }
+      const quiet = state.renewing;
+      state.renewing = false;
+      if (resp.error) { if (!quiet) toast('Sign-in failed: ' + resp.error); return; }
+      const wasSignedOut = !state.token;
       setToken(resp.access_token, resp.expires_in);
       $('#banner').hidden = true;
-      start();
+      if (!quiet) start();
+      else if (wasSignedOut) loadBoard();
     },
-    error_callback: (err) =>
-      toast(err.type === 'popup_closed' ? 'Sign-in window was closed.' : 'Sign-in failed: ' + err.type),
+    error_callback: (err) => {
+      if (state.renewing) { state.renewing = false; return; } // the banner still offers signing in
+      toast(err.type === 'popup_closed' ? 'Sign-in window was closed.' : 'Sign-in failed: ' + err.type);
+    },
   });
 }
 
@@ -155,7 +168,23 @@ function restoreToken() {
 }
 
 function signIn() {
+  state.renewing = false;
   tokenClient.requestAccessToken(state.me ? { login_hint: state.me } : {});
+}
+
+// Google's sign-in lasts about an hour. Ask for a new one shortly before it runs out (or on coming back
+// to an expired window), so a window left open keeps updating. Google's window flashes up for a moment,
+// so wait for a pause in the user's typing and clicking until the last minute. If the browser blocks it
+// as a pop-up, the "sign in again" banner shows, as before.
+function renewSignIn() {
+  if (!tokenClient || !state.me || $('#main-row').hidden) return;
+  const now = Date.now();
+  if (state.token && now < state.tokenExp - RENEW_BEFORE_MS) return;
+  if (state.token && now < state.tokenExp - RENEW_LAST_MS && now - state.lastInput < RENEW_IDLE_MS) return;
+  if (now - state.lastRenew < RENEW_EVERY_MS) return;
+  state.lastRenew = now;
+  state.renewing = true;
+  tokenClient.requestAccessToken({ prompt: '', login_hint: state.me });
 }
 
 function needSignIn() {
@@ -1350,6 +1379,7 @@ async function loadBoard() {
 // it is cheap, so check it often and only reload the board when it moved. Waits while a reload would get
 // in the way (the change stays unseen, so the next check picks it up).
 async function watchMailbox() {
+  if (document.visibilityState === 'visible') renewSignIn();
   if (document.visibilityState !== 'visible' || !state.token || state.loading || state.dragging
     || state.addingColumn || state.armedDelete || $('#menu') || $('#color-pop')) return;
   try {
@@ -3504,6 +3534,9 @@ function wireUi() {
     else watchMailbox();
   });
   addEventListener('focus', watchMailbox);
+  for (const type of ['keydown', 'pointerdown', 'pointermove', 'wheel']) {
+    addEventListener(type, () => { state.lastInput = Date.now(); }, { capture: true, passive: true });
+  }
   setInterval(() => { if (document.visibilityState === 'visible') loadBoard(); }, REFRESH_MS);
   setInterval(watchMailbox, WATCH_MS);
 }
