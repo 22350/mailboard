@@ -2711,6 +2711,32 @@ function renderUnsubscribe(msgs) {
   return el('div', { class: 'unsub' }, [btn, el('span', { class: 'hint' }, `from ${name}`)]);
 }
 
+// The newest message first and open, right at the top; the earlier ones folded away behind a small
+// "↑ N earlier messages" button above it, shown in date order (closed) when clicked (Paul, 2026-11-03).
+function renderMessages(msgs) {
+  const box = el('div', { class: 'messages' });
+  const latest = msgs[msgs.length - 1];
+  const earlier = msgs.slice(0, -1);
+  if (!latest) return box;
+  if (earlier.length) {
+    const unread = earlier.filter((m) => (m.labelIds || []).includes('UNREAD')).length;
+    const n = earlier.length;
+    const more = el('button', { type: 'button', class: 'earlier-btn', 'aria-expanded': 'false' },
+      `↑ ${n} earlier message${n === 1 ? '' : 's'}${unread ? ` (${unread} unread)` : ''}`);
+    const list = el('div', { class: 'earlier', hidden: '' }, earlier.map((m) => renderMessage(m, false)));
+    more.addEventListener('click', () => {
+      const open = list.hidden;
+      list.hidden = !open;
+      more.setAttribute('aria-expanded', String(open));
+      more.textContent = open ? `↓ Hide ${n} earlier message${n === 1 ? '' : 's'}`
+        : `↑ ${n} earlier message${n === 1 ? '' : 's'}${unread ? ` (${unread} unread)` : ''}`;
+    });
+    box.append(more, list);
+  }
+  box.append(renderMessage(latest, true));
+  return box;
+}
+
 function readerHead(title) {
   const close = el('button', { 'aria-label': 'Close' }, '✕');
   close.addEventListener('click', closeReader);
@@ -2747,10 +2773,10 @@ async function openThread(id) {
       readerHead(header(msgs[0] || {}, 'subject') || '(no subject)'),
       ...[renderUnsubscribe(msgs)].filter(Boolean),
       actions,
-      el('div', { class: 'messages' }, msgs.map((m, i) =>
-        renderMessage(m, i === msgs.length - 1 || (m.labelIds || []).includes('UNREAD')))),
+      renderMessages(msgs),
       renderReplyBox(msgs[msgs.length - 1] || draftMsg, id, draft),
     );
+    reader.scrollTop = 0;                    // the newest message starts at the top of the window
     const t = state.threads.get(id);
     if (t?.unread) {
       await api(`/threads/${id}/modify`, { method: 'POST', body: { removeLabelIds: ['UNREAD'] } });

@@ -255,6 +255,10 @@ a { color: var(--accent); }
 .actions button.current { background: var(--accent); border-color: var(--accent); color: var(--accent-text); opacity: 1; }
 .message { border: 1px solid var(--border); border-radius: 10px; padding: .6rem .8rem; }
 .message summary { cursor: pointer; display: grid; grid-template-columns: 1fr auto; gap: .2rem .8rem; }
+.earlier-btn { display: block; width: 100%; text-align: left; margin: 0 0 .5rem; min-height: 38px; padding: 0 .8rem;
+  font-weight: 600; color: var(--muted); background: var(--col); border: 1px dashed var(--border); border-radius: 8px; cursor: pointer; }
+.earlier-btn:hover { color: var(--text); }
+.earlier { border-left: 3px solid var(--border); padding-left: .5rem; margin-bottom: .6rem; }
 .message summary .snippet { grid-column: 1 / -1; color: var(--muted); font-size: .85rem; }
 .message[open] summary .snippet { display: none; }
 .message time { color: var(--muted); font-size: .85rem; }
