@@ -2129,9 +2129,11 @@ function renderColumn(col, i) {
   const sort = sortOf(col);
   const sortBtn = iconButton(`Sort: ${sort.label}`, 'sort', (b) => openSortMenu(b, col));
   if (sort.key !== 'newest') sortBtn.classList.add('on');
+  const closeBtn = i > 0 ? iconButton(`Remove column “${col.name}”`, null, () => removeColumn(i), '✕') : null;
+  // Tells Stediclick's magnet to aim at this button's left end, away from the column-width handle beside it.
+  (closeBtn || sortBtn).classList.add('steady-aim-left');
   const head = el('h2', {}, [columnCheckbox(i), col.name, el('span', { class: 'count' }, ids.length + (state.more[i] ? '+' : '')),
-    sortBtn,
-    i > 0 ? iconButton(`Remove column “${col.name}”`, null, () => removeColumn(i), '✕') : null]);
+    sortBtn, closeBtn]);
   const node = el('section', { class: 'column' + (settings.collapsedCols.includes(col.name) ? ' collapsed' : ''), 'data-col': i }, [
     head,
     el('div', { class: 'cards' }, ids.map((id) => renderCard(state.threads.get(id), i))),
