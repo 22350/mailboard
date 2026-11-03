@@ -1107,7 +1107,7 @@ async function renameUserLabel(l) {
   if (wasShowing) state.folder = name;
 }
 
-// ---------- Report issue: a tester's bug report or request, sent from their own Gmail ----------
+// ---------- Feedback: a tester's bug report or request, sent from their own Gmail ----------
 // Goes to the beta address (forwarded to Paul). Shows exactly what is sent before sending; no email
 // content is ever included, only what the tester types and the technical details listed.
 const REPORT_TO = 'beta@stedimail.com';
@@ -1132,7 +1132,7 @@ function reportDetails() {
 }
 
 function openReport() {
-  const dlg = el('dialog', { class: 'report', 'aria-label': 'Report issue' });
+  const dlg = el('dialog', { class: 'report', 'aria-label': 'Feedback' });
   let kind = null;
   const close = () => { dlg.close(); dlg.remove(); };
   const choose = () => {
@@ -1142,7 +1142,7 @@ function openReport() {
     wrong.addEventListener('click', () => { kind = 'issue'; write(); });
     want.addEventListener('click', () => { kind = 'request'; write(); });
     cancel.addEventListener('click', close);
-    dlg.replaceChildren(el('h2', {}, 'Report issue'), el('div', { class: 'big-choices' }, [wrong, want]),
+    dlg.replaceChildren(el('h2', {}, 'Feedback'), el('div', { class: 'big-choices' }, [wrong, want]),
       el('div', { class: 'ask-buttons' }, [cancel]));
   };
   const write = () => {
