@@ -2133,6 +2133,9 @@ function renderCard(t, colIdx) {
       + (state.selected.has(t.id) ? ' selected' : ''),
     style: color ? `--card-color:${color.bg}` : null,
     tabindex: '0', draggable: 'true', 'data-id': t.id, 'data-col': colIdx,
+    // A button to accessibility, with a name: so Stediclick's sticky buttons and magnet see each card
+    // (plain <article>s weren't reported at all), and screen readers say what it is.
+    role: 'button', 'aria-label': `${t.unread ? 'Unread: ' : ''}${t.subject}, from ${t.people}`,
   }, [
     el('div', { class: 'top' }, [
       checkbox('Select', state.selected.has(t.id), () => toggleSelect(t.id)),

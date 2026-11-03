@@ -214,6 +214,10 @@ a { color: var(--accent); }
   background: var(--panel); padding-left: .4rem; border-radius: 8px;
 }
 .card:hover .card-actions, .card:focus-within .card-actions { display: flex; }
+/* Bigger hover buttons on cards, easier to hit (Paul, 2026-11-03): 34 → 44 px, icons 18 → 24 px */
+.card-actions { gap: .3rem; top: .25rem; right: .25rem; padding: .15rem .2rem .15rem .4rem; }
+.card-actions .icon-btn { width: 44px; min-height: 44px; border-radius: 10px; }
+.card-actions .icon-btn svg { width: 24px; height: 24px; }
 @media (hover: none) {
   .card-actions { position: static; display: flex; justify-content: flex-end; margin-top: .3rem; }
 }
