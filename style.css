@@ -60,7 +60,7 @@ a { color: var(--accent); }
 .column.search { border: 2px dashed var(--accent); }
 .column.search h2 .q { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .column.search h2 .count { margin-left: auto; }
-.column.search .icon-btn { width: 30px; min-height: 30px; }
+.column.search .icon-btn { width: 39px; min-height: 39px; }
 .column .hint { padding: 0 .4rem; }
 .card .where {
   font-size: .75rem; color: var(--muted); white-space: nowrap;
@@ -134,7 +134,8 @@ a { color: var(--accent); }
 .column h2 { font-size: 1rem; margin: 0; padding: .8rem 1rem; display: flex; gap: .5rem; align-items: center; }
 .column h2 { background: var(--bar-bg); color: var(--bar-text); border-radius: 10px 10px 0 0; margin-bottom: .6rem; }
 .column .count { margin-left: auto; color: var(--bar-muted); font-weight: normal; }
-.column h2 .icon-btn { width: 30px; min-height: 30px; font-size: .95rem; color: var(--bar-text); opacity: .65; }
+.column h2 .icon-btn { flex: none; width: 39px; min-height: 39px; font-size: 1.235rem; color: var(--bar-text); opacity: .65; }
+.column h2 .icon-btn svg { width: 25px; height: 25px; }
 .column h2 .icon-btn:hover:not(:disabled) { opacity: 1; background: rgba(255,255,255,.14); }
 .column h2 .icon-btn.on { opacity: 1; color: #9fbf5a; }
 .column h2 .pick { accent-color: #9fbf5a; }
@@ -318,13 +319,16 @@ body.cols-sized .column { flex: 0 0 var(--col-w); max-width: none; width: var(--
   .column.collapsed.drop h2 { color: var(--text); }
 }
 .col-resize {
-  position: absolute; top: 0; width: 12px; height: 46px; z-index: 2; cursor: ew-resize; touch-action: none;
+  position: absolute; top: -2px; width: calc(1rem + 5px); height: calc(39px + 1.6rem); z-index: 2; cursor: ew-resize; touch-action: none;
   border-radius: 6px; opacity: 0; transition: opacity .15s;
 }
-.col-resize.left { left: -7px; }
-.col-resize.right { right: -7px; }
+/* Each handle fills the whole gap beside the header. A gap belongs to the column on its left, so dragging
+   right always widens; the next column's left handle only keeps its own edge, unless that column is minimized. */
+.col-resize.left { left: calc(-2px - 1rem); }
+.col-resize.right { right: calc(-2px - 1rem); }
+.column:not(.collapsed) + .column .col-resize.left { left: -2px; width: 5px; }
 .col-resize::after {
-  content: ''; position: absolute; top: 12px; bottom: 12px; left: 4px; width: 4px; border-radius: 2px; background: var(--accent);
+  content: ''; position: absolute; top: 12px; bottom: 12px; left: calc(50% - 2px); width: 4px; border-radius: 2px; background: var(--accent);
 }
 .column:hover .col-resize, .col-resize:active, body.col-resizing .col-resize { opacity: .8; }
 body.col-resizing, body.col-resizing * { cursor: ew-resize !important; user-select: none; }
