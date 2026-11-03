@@ -276,8 +276,14 @@ async function ensureLabels(cols) {
   state.snoozeIds = new Set(state.snoozeLabels.map((l) => l.id));
   state.snoozeFlagId = labels.find((l) => l.name === SNOOZE_FLAG)?.id || null;
   state.allUserLabels = ownLabelChoices(labels);
+  // StediMail's spare column labels (Board/<name> that isn't a column now), for the + suggestions.
+  const inUse = new Set(cols.filter((c) => !c.inbox).map((c) => labelNameOf(c.name)));
+  state.spareBoardLabels = labels.filter((l) => l.name.startsWith(LABEL_PREFIX) && !l.name.startsWith(COLOR_PREFIX)
+      && !inUse.has(l.name) && !l.name.slice(LABEL_PREFIX.length).includes('/'))
+    .map((l) => l.name.slice(LABEL_PREFIX.length));
+  // The sidebar lists every label like Gmail does, column labels (Board/…) included.
   state.userLabels = labels
-    .filter((l) => l.type === 'user' && !l.name.startsWith(LABEL_PREFIX) && !l.name.startsWith('Mailboard/') && l.name !== 'Mailboard' && l.name !== SNOOZE_FLAG)
+    .filter((l) => l.type === 'user' && !l.name.startsWith(COLOR_PREFIX) && !l.name.startsWith('Mailboard/') && l.name !== 'Mailboard' && l.name !== SNOOZE_FLAG)
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   for (const col of cols) {
     if (col.inbox) continue;
@@ -1045,10 +1051,18 @@ function openLabelMenu(anchor, l) {
     { label: 'Show', checked: msgs === 'show', run: () => patchLabel(l, { messageListVisibility: 'show' }) },
     { label: 'Hide', checked: msgs === 'hide', run: () => patchLabel(l, { messageListVisibility: 'hide' }) },
     { sep: true },
-    { label: 'Edit', run: () => renameUserLabel(l) },
-    { label: 'Remove label', run: () => removeUserLabel(l) },
+    ...(columnOfLabel(l) ? [
+      { label: `This label is the “${columnOfLabel(l)}” column: rename or remove it there`, run: () => {} },
+    ] : [
+      { label: 'Edit', run: () => renameUserLabel(l) },
+      { label: 'Remove label', run: () => removeUserLabel(l) },
+    ]),
     { label: 'Add sublabel', run: () => createLabel(l.name + '/') },
   ]);
+}
+
+function columnOfLabel(l) {
+  return settings.columns.find((c) => labelNameOf(c) === l.name) || null;
 }
 
 function storeUserLabel(updated) {
@@ -1096,6 +1110,7 @@ async function removeUserLabel(l) {
   try {
     await api(`/labels/${l.id}`, { method: 'DELETE' });
     state.userLabels = state.userLabels.filter((x) => x.id !== l.id);
+    state.spareBoardLabels = (state.spareBoardLabels || []).filter((n) => LABEL_PREFIX + n !== l.name);
     if (state.folder === l.name) clearSearch();
     renderSidebar();
     toast(`Removed label “${l.name}”`);
@@ -1747,8 +1762,10 @@ function renderAddColumn() {
     const input = el('input', { placeholder: 'New column, or one of your labels', 'aria-label': 'New column name, or one of your labels',
       list: 'own-label-list' });
     const taken = new Set(settings.columns.map((n) => labelNameOf(n)));
-    const options = el('datalist', { id: 'own-label-list' },
-      (state.allUserLabels || []).filter((l) => !taken.has(l.name)).map((l) => el('option', { value: l.name })));
+    const options = el('datalist', { id: 'own-label-list' }, [
+      ...(state.spareBoardLabels || []).map((n) => el('option', { value: n, label: 'StediMail column (has its label already)' })),
+      ...(state.allUserLabels || []).filter((l) => !taken.has(l.name)).map((l) => el('option', { value: l.name, label: 'your label' })),
+    ]);
     let finished = false;
     const finish = (save) => {
       if (finished) return;
