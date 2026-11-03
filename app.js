@@ -60,6 +60,7 @@ const settings = {
   // Every other column is StediMail's own label "Board/<name>".
   columnLabels: store.get('columnLabels', {}),
   colWidth: store.get('colWidth', null),   // px shared by all columns; null = automatic
+  collapsedCols: store.get('collapsedCols', []), // names of columns minimized to a vertical strip
   readerWidth: store.get('readerWidth', null),
   barColor: store.get('barColor', null),   // title bar color (#rrggbb); null = default olive   // px for the opened-email panel; null = normal (760)
 };
@@ -2111,6 +2112,18 @@ function resizeHandles(node) {
   });
 }
 
+// Double-click a column's header to minimize it to a strip with its name running down it; double-click
+// the strip to bring it back. Cards can still be dropped on it. Remembered per browser; not on phones,
+// which show one column at a time.
+function toggleCollapsed(col, node) {
+  const on = !settings.collapsedCols.includes(col.name);
+  settings.collapsedCols = on
+    ? [...settings.collapsedCols, col.name]
+    : settings.collapsedCols.filter((name) => name !== col.name);
+  store.set('collapsedCols', settings.collapsedCols);
+  node.classList.toggle('collapsed', on);
+}
+
 function renderColumn(col, i) {
   const ids = state.board[i] || [];
   const sort = sortOf(col);
@@ -2119,16 +2132,21 @@ function renderColumn(col, i) {
   const head = el('h2', {}, [columnCheckbox(i), col.name, el('span', { class: 'count' }, ids.length + (state.more[i] ? '+' : '')),
     sortBtn,
     i > 0 ? iconButton(`Remove column “${col.name}”`, null, () => removeColumn(i), '✕') : null]);
-  const node = el('section', { class: 'column', 'data-col': i }, [
+  const node = el('section', { class: 'column' + (settings.collapsedCols.includes(col.name) ? ' collapsed' : ''), 'data-col': i }, [
     head,
     el('div', { class: 'cards' }, ids.map((id) => renderCard(state.threads.get(id), i))),
   ]);
   node.append(...resizeHandles(node));
+  head.title = 'Double-click to minimize or restore this column';
+  head.addEventListener('dblclick', (e) => {
+    if (e.target.closest('button, input') || matchMedia('(max-width: 640px)').matches) return;
+    toggleCollapsed(col, node);
+  });
   const clearMarks = () => node.classList.remove('drop', 'insert-before', 'insert-after');
   if (columnMovable(col, i)) {
     head.draggable = true;
     head.classList.add('grab');
-    head.title = 'Drag to move this column';
+    head.title = 'Drag to move this column · double-click to minimize or restore it';
     head.addEventListener('dragstart', (e) => {
       state.dragging = true;
       e.dataTransfer.setData(COLUMN_DRAG, String(i));

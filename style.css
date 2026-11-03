@@ -308,6 +308,15 @@ dialog h2 { margin: 0; }
 /* Column resizing: grab handles at each column's top corners set one width for all columns. */
 .column { position: relative; }
 body.cols-sized .column { flex: 0 0 var(--col-w); max-width: none; width: var(--col-w); }
+/* A minimized column: a strip with its name running down it, letters' feet to the left. */
+.column h2 { user-select: none; }
+@media (min-width: 641px) {
+  .column.collapsed, body.cols-sized .column.collapsed { flex: 0 0 auto; width: auto; max-width: none; background: var(--bar-bg); overflow: hidden; }
+  .column.collapsed.drop { background: var(--drop); }
+  .column.collapsed > :not(h2), .column.collapsed h2 > * { display: none; }
+  .column.collapsed h2 { flex: 1; min-height: 0; margin: 0; padding: .7rem .3rem; writing-mode: vertical-rl; white-space: nowrap; background: transparent; color: var(--bar-text); }
+  .column.collapsed.drop h2 { color: var(--text); }
+}
 .col-resize {
   position: absolute; top: 0; width: 12px; height: 46px; z-index: 2; cursor: ew-resize; touch-action: none;
   border-radius: 6px; opacity: 0; transition: opacity .15s;
