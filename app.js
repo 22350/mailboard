@@ -1523,7 +1523,7 @@ async function spamThread(id) {
   }
 }
 
-async function trashThread(id) {
+async function trashThread(id, said = 'Moved to Trash') {
   const t = state.threads.get(id);
   if (t?.labels.has('TRASH')) return deleteForever([id]);
   try {
@@ -1532,7 +1532,7 @@ async function trashThread(id) {
     assign(columns());
     render();
     if (state.openId === id) closeReader();
-    toast('Moved to Trash', {
+    toast(said, {
       label: 'Undo',
       run: async () => {
         try {
@@ -2679,7 +2679,7 @@ function unsubscribeInBody(m, strict = false) {
 function unsubscribedOn() {
   try { return JSON.parse(localStorage.getItem('unsubscribed') || '{}'); } catch { return {}; }
 }
-function renderUnsubscribe(msgs) {
+function renderUnsubscribe(msgs, threadId) {
   const u = unsubscribeOf(msgs);
   if (!u) return null;
   const name = displayName(u.from);
@@ -2687,28 +2687,32 @@ function renderUnsubscribe(msgs) {
   const asked = unsubscribedOn()[addr];
   const btn = el('button', { type: 'button', class: 'unsub-btn' }, asked ? `Unsubscribe again (asked ${asked})` : 'Unsubscribe');
   btn.addEventListener('click', async () => {
-    if (!await askConfirm(`Unsubscribe from ${name}?\n\nThey should stop sending these emails; some senders take a few days.`, 'Unsubscribe')) return;
+    if (!await askConfirm(`Unsubscribe from ${name}?\n\nThey should stop sending these emails (some take a few days), and this email goes to Trash.`, 'Unsubscribe')) return;
+    let done = '';
     try {
       if (u.oneClick) {
         // The sender's one-click address (RFC 8058). The browser can't read the reply from another site,
         // so this says "sent", not "done".
         await fetch(u.web, { method: 'POST', mode: 'no-cors', body: 'List-Unsubscribe=One-Click',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-        toast(`Unsubscribe request sent to ${name}.`);
+        done = `Unsubscribe request sent to ${name}.`;
       } else if (u.mail) {
         const url = new URL(u.mail);
         const to = decodeURIComponent(url.pathname);
         await sendMail({ To: to, Subject: url.searchParams.get('subject') || 'unsubscribe' }, url.searchParams.get('body') || 'unsubscribe');
-        toast(`Unsubscribe email sent to ${name} from your Gmail.`);
+        done = `Unsubscribe email sent to ${name} from your Gmail.`;
       } else {
         window.open(u.web, '_blank', 'noopener');
-        toast(`${name}'s unsubscribe page opened in a new tab: finish there.`);
+        done = `${name}'s unsubscribe page opened in a new tab: finish there.`;
       }
       const all = unsubscribedOn();
       all[addr] = new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
       try { localStorage.setItem('unsubscribed', JSON.stringify(all)); } catch {}
       btn.textContent = 'Unsubscribe requested';
       btn.disabled = true;
+      // Unsubscribed: the email goes to Trash too (Paul, 2026-11-03); Undo brings the email back.
+      if (threadId) await trashThread(threadId, `${done} The email is in Trash.`);
+      else toast(done);
     } catch (e) { if (!(e instanceof AuthError)) toast('Unsubscribe failed: ' + e.message); }
   });
   return el('div', { class: 'unsub' }, [btn, el('span', { class: 'hint' }, `from ${name}`)]);
@@ -2774,7 +2778,7 @@ async function openThread(id) {
     renderActions(actions, id);
     reader.replaceChildren(
       readerHead(header(msgs[0] || {}, 'subject') || '(no subject)'),
-      ...[renderUnsubscribe(msgs)].filter(Boolean),
+      ...[renderUnsubscribe(msgs, id)].filter(Boolean),
       actions,
       renderMessages(msgs),
       renderReplyBox(msgs[msgs.length - 1] || draftMsg, id, draft),
