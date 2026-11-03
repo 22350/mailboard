@@ -2159,6 +2159,35 @@ const FRAME_HEAD = '<!doctype html><meta charset="utf-8"><base target="_blank"><
   '#mb-copy{position:absolute;z-index:9;font:12px system-ui,sans-serif;padding:2px 8px;border:1px solid #bbb;' +
   'border-radius:6px;background:#fde2e2;border-color:#f3a5a5;color:#8a1c1c;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.2)}</style>';
 
+// Pictures inside an email (logos, icons) are attached parts the HTML points at as "cid:<Content-ID>".
+function partHeader(p, name) {
+  return (p.headers || []).find((h) => h.name.toLowerCase() === name)?.value || '';
+}
+function inlineParts(part, out = []) {
+  if (!part) return out;
+  const cid = partHeader(part, 'content-id').replace(/^<|>$/g, '');
+  if (cid && (part.body?.attachmentId || part.body?.data)) out.push({ cid, part });
+  for (const p of part.parts || []) inlineParts(p, out);
+  return out;
+}
+const escapeRe = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+async function withInlineImages(m, content) {
+  for (const { cid, part } of inlineParts(m.payload)) {
+    if (!content.toLowerCase().includes('cid:' + cid.toLowerCase())) continue;
+    try {
+      const data = part.body.data || (await api(`/messages/${m.id}/attachments/${part.body.attachmentId}`)).data;
+      const url = `data:${part.mimeType || 'image/png'};base64,${data.replace(/-/g, '+').replace(/_/g, '/')}`;
+      content = content.replace(new RegExp('cid:' + escapeRe(cid), 'gi'), url);
+    } catch {}
+  }
+  return content;
+}
+function referencedCids(m) {
+  const html = findPart(m.payload, 'text/html');
+  const content = html ? decodePart(html).toLowerCase() : '';
+  return new Set(inlineParts(m.payload).filter(({ cid }) => content.includes('cid:' + cid.toLowerCase())).map(({ part }) => part));
+}
+
 function bodyFrame(m) {
   const html = findPart(m.payload, 'text/html');
   const text = html ? null : findPart(m.payload, 'text/plain');
@@ -2172,6 +2201,7 @@ function bodyFrame(m) {
     sandbox: 'allow-same-origin allow-popups allow-popups-to-escape-sandbox',
   });
   frame.srcdoc = FRAME_HEAD + content;
+  if (html && /cid:/i.test(content)) withInlineImages(m, content).then((c) => { if (c !== content) frame.srcdoc = FRAME_HEAD + c; });
   frame.addEventListener('load', () => {
     const doc = frame.contentDocument;
     if (!doc) return;
@@ -2286,10 +2316,12 @@ function renderMessage(m, expanded) {
   const from = header(m, 'from');
   const to = header(m, 'to');
   const cc = header(m, 'cc');
+  const subject = header(m, 'subject');
   const details = el('details', { class: 'message' }, [
     el('summary', {}, [
       el('strong', {}, displayName(from)),
       el('time', {}, dateLabel(Number(m.internalDate), true)),
+      el('div', { class: 'msg-subject' }, subject || '(no subject)'),
       el('div', { class: 'snippet' }, decodeEntities(m.snippet || '')),
     ]),
   ]);
@@ -2299,7 +2331,8 @@ function renderMessage(m, expanded) {
     loaded = true;
     details.append(addrLine([['From', from], ['To', to], ['Cc', cc]]));
     details.append(bodyFrame(m));
-    const files = attachmentsOf(m.payload);
+    const shownInside = referencedCids(m);           // pictures shown in the email aren't listed as files
+    const files = attachmentsOf(m.payload).filter((p) => !shownInside.has(p));
     if (files.length) {
       details.append(el('div', { class: 'files' }, files.map((p) => {
         const b = el('button', {}, '📎 ' + p.filename);
