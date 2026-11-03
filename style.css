@@ -37,7 +37,9 @@ a { color: var(--accent); }
   display: flex; align-items: center; gap: .6rem; padding: .6rem 1rem;
   background: var(--bar-bg); color: var(--bar-text);
 }
-.bar h1 { font-size: 1.15rem; margin: 0; }
+.bar h1 { font-size: 1.15rem; margin: 0 .55rem 0 .35rem; padding: .3rem 0; line-height: 0; }
+/* The StediMail logo (white), its letters 30% taller than the old 1.15rem title's (Paul, 2026-11-03) */
+.bar h1 .logo { display: block; height: 1.3rem; width: auto; }
 .bar .status { color: var(--bar-muted); }
 .bar button {
   background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.22); color: var(--bar-text);
@@ -437,6 +439,7 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 @media (max-width: 640px) {
   .bar { flex-wrap: wrap; row-gap: .5rem; padding: .5rem .75rem; }
   .bar h1 { display: block; font-size: 1.05rem; }
+  .bar h1 .logo { height: 1.2rem; }
   .bar .status, .bar .spacer { display: none; }
   .bar h1 { margin-right: auto; }
   .bar .search-box { order: 10; flex: 1 0 100%; }
