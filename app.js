@@ -838,7 +838,9 @@ const FOLDERS = [
   { name: 'Spam', icon: 'spam', label: 'SPAM', count: 'unread', spamTrash: true },
   { name: 'Trash', icon: 'trash', label: 'TRASH', spamTrash: true },
   { name: 'Purchases', icon: 'bag', q: 'category:purchases' },
-  { name: 'Promotions', icon: 'offer', label: 'CATEGORY_PROMOTIONS', count: 'unread' },
+  // Gmail's own search, like Purchases: the CATEGORY_PROMOTIONS label filter came back empty (Paul, 2026-11-03);
+  // the label is still used for the unread count.
+  { name: 'Promotions', icon: 'offer', q: 'category:promotions', countLabel: 'CATEGORY_PROMOTIONS', count: 'unread' },
   { name: 'Starred', icon: 'star', label: 'STARRED' },
   { name: 'Important', icon: 'important', label: 'IMPORTANT' },
   { name: 'Scheduled', icon: 'clock', q: 'in:scheduled' },
@@ -846,7 +848,7 @@ const FOLDERS = [
 
 async function loadCounts() {
   const ids = [
-    ...FOLDERS.filter((f) => f.count).map((f) => f.label),
+    ...FOLDERS.filter((f) => f.count).map((f) => f.countLabel || f.label),
     ...state.userLabels.slice(0, 40).map((l) => l.id),
   ];
   const got = await Promise.all(ids.map((id) =>
@@ -950,7 +952,7 @@ function renderSidebar() {
   const counts = state.labelCounts;
 
   const folderRow = (f) => {
-    const c = f.label && counts[f.label];
+    const c = (f.countLabel || f.label) && counts[f.countLabel || f.label];
     const n = !c ? 0 : f.count === 'total' ? c.messagesTotal : f.count === 'unread' ? c.threadsUnread : 0;
     const active = f.board ? !state.search : state.folder === f.name;
     return navItem(f.name, f.icon, n, active, () => (f.board ? clearSearch() : runSearch('', f)),
@@ -2614,6 +2616,91 @@ function setupReaderResize() {
   window.addEventListener('resize', () => applyReaderWidth(settings.readerWidth));
 }
 
+// ---- Unsubscribe (Paul, 2026-11-03): only on advertising and company-update emails (isBulk), from the
+// List-Unsubscribe header, else the unsubscribe link in the email itself. ----
+const UNSUB_CATEGORIES = ['CATEGORY_PROMOTIONS', 'CATEGORY_UPDATES', 'CATEGORY_SOCIAL', 'CATEGORY_FORUMS'];
+// Sent to many people by a company: in one of Gmail's tabs, or carrying the headers only mass mail has
+// (Gmail's category labels may be missing when its tabs are turned off). Personal mail has neither.
+function isBulk(m) {
+  return (m.labelIds || []).some((l) => UNSUB_CATEGORIES.includes(l))
+    || !!header(m, 'list-unsubscribe') || !!header(m, 'list-id') || /bulk|list/i.test(header(m, 'precedence'));
+}
+function unsubscribeOf(msgs) {
+  for (const m of [...msgs].reverse()) {
+    if (!isBulk(m)) continue;
+    const list = header(m, 'list-unsubscribe');
+    const links = [...list.matchAll(/<([^>]+)>/g)].map((x) => x[1].trim());
+    const web = links.find((u) => /^https:\/\//i.test(u));
+    const mail = links.find((u) => /^mailto:/i.test(u));
+    if (web || mail) {
+      return { from: header(m, 'from'), web, mail, oneClick: !!web && /one-click/i.test(header(m, 'list-unsubscribe-post')) };
+    }
+    // No header: the unsubscribe link the law makes them put in the email itself (Paul: "unsubscribe at
+    // the bottom of the email is required").
+    const inBody = unsubscribeInBody(m);
+    if (inBody) return { from: header(m, 'from'), web: inBody, oneClick: false };
+  }
+  return null;
+}
+const UNSUB_WORDS = /unsubscri|opt[\s-]?out|email preferences|manage (?:your )?(?:subscription|preferences|email)/i;
+function unsubscribeInBody(m) {
+  const html = findPart(m.payload, 'text/html');
+  if (html) {
+    const doc = new DOMParser().parseFromString(decodePart(html), 'text/html');
+    const links = [...doc.querySelectorAll('a[href^="http"]')];
+    // Best: the words in the link's text; then in its address; the last such link (footers are at the end).
+    const byText = links.filter((a) => UNSUB_WORDS.test(a.textContent || '') || UNSUB_WORDS.test(a.title || ''));
+    const byHref = links.filter((a) => /unsub|optout|opt-out/i.test(a.getAttribute('href')));
+    const a = byText.pop() || byHref.pop();
+    if (a) return a.getAttribute('href');
+  }
+  const text = findPart(m.payload, 'text/plain');
+  if (text) {
+    const t = decodePart(text);
+    const near = [...t.matchAll(/https?:\/\/[^\s<>")]+/g)].filter((x) =>
+      UNSUB_WORDS.test(t.slice(Math.max(0, x.index - 80), x.index + x[0].length)) || /unsub|optout/i.test(x[0]));
+    if (near.length) return near.pop()[0];
+  }
+  return null;
+}
+function unsubscribedOn() {
+  try { return JSON.parse(localStorage.getItem('unsubscribed') || '{}'); } catch { return {}; }
+}
+function renderUnsubscribe(msgs) {
+  const u = unsubscribeOf(msgs);
+  if (!u) return null;
+  const name = displayName(u.from);
+  const addr = (u.from.match(/<([^>]+)>/)?.[1] || u.from).toLowerCase();
+  const asked = unsubscribedOn()[addr];
+  const btn = el('button', { type: 'button', class: 'unsub-btn' }, asked ? `Unsubscribe again (asked ${asked})` : 'Unsubscribe');
+  btn.addEventListener('click', async () => {
+    if (!await askConfirm(`Unsubscribe from ${name}?\n\nThey should stop sending these emails; some senders take a few days.`, 'Unsubscribe')) return;
+    try {
+      if (u.oneClick) {
+        // The sender's one-click address (RFC 8058). The browser can't read the reply from another site,
+        // so this says "sent", not "done".
+        await fetch(u.web, { method: 'POST', mode: 'no-cors', body: 'List-Unsubscribe=One-Click',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+        toast(`Unsubscribe request sent to ${name}.`);
+      } else if (u.mail) {
+        const url = new URL(u.mail);
+        const to = decodeURIComponent(url.pathname);
+        await sendMail({ To: to, Subject: url.searchParams.get('subject') || 'unsubscribe' }, url.searchParams.get('body') || 'unsubscribe');
+        toast(`Unsubscribe email sent to ${name} from your Gmail.`);
+      } else {
+        window.open(u.web, '_blank', 'noopener');
+        toast(`${name}'s unsubscribe page opened in a new tab: finish there.`);
+      }
+      const all = unsubscribedOn();
+      all[addr] = new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      try { localStorage.setItem('unsubscribed', JSON.stringify(all)); } catch {}
+      btn.textContent = 'Unsubscribe requested';
+      btn.disabled = true;
+    } catch (e) { if (!(e instanceof AuthError)) toast('Unsubscribe failed: ' + e.message); }
+  });
+  return el('div', { class: 'unsub' }, [btn, el('span', { class: 'hint' }, `from ${name}`)]);
+}
+
 function readerHead(title) {
   const close = el('button', { 'aria-label': 'Close' }, '✕');
   close.addEventListener('click', closeReader);
@@ -2648,6 +2735,7 @@ async function openThread(id) {
     renderActions(actions, id);
     reader.replaceChildren(
       readerHead(header(msgs[0] || {}, 'subject') || '(no subject)'),
+      ...[renderUnsubscribe(msgs)].filter(Boolean),
       actions,
       el('div', { class: 'messages' }, msgs.map((m, i) =>
         renderMessage(m, i === msgs.length - 1 || (m.labelIds || []).includes('UNREAD')))),
