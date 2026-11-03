@@ -914,7 +914,9 @@ function navDropHandler(target) {
   const many = (id) => state.selected.has(id) && state.selected.size > 1 && !state.selectAll;
   const pick = (one, bulk) => (id) => (many(id) ? runBulk(...bulk) : one(id));
   const addLabel = (labelId, verb, move) => {
-    const offBoard = () => ['INBOX', ...columns().slice(1).map((c) => state.labelIds[c.name])];
+    // Off the board's columns, but never out of Gmail's Inbox: StediMail doesn't rearrange a tester's
+    // Gmail inbox (Paul's rule). Only Archive takes an email out of the Inbox.
+    const offBoard = () => columns().slice(1).map((c) => state.labelIds[c.name]).filter((l) => l !== labelId);
     return pick(
       (id) => {
         const t = state.threads.get(id);
@@ -924,7 +926,7 @@ function navDropHandler(target) {
       ['labels', { add: [labelId], remove: move ? offBoard() : [], verb }],
     );
   };
-  if (target.userLabel) return addLabel(target.userLabel.id, `Moved to ${target.userLabel.name}`, true);
+  if (target.userLabel) return addLabel(target.userLabel.id, `Labelled “${target.userLabel.name}”. It stays in your Gmail Inbox.`, true);
   switch (target.name) {
     case 'Inbox': return pick((id) => moveWithUndo(id, 0), ['move', 0]);
     case 'All Mail': return pick(archiveThread, ['archive']);
