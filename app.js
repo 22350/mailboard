@@ -1759,12 +1759,43 @@ function dateLabel(ms, full) {
 function setStatus(text) { $('#status').textContent = text; }
 
 let toastTimer;
+// Standard undo (Paul, 2026-11-03): every change whose message offers Undo also goes on this list, so it
+// can still be undone after the message has gone — Ctrl+Z or the Undo button, latest first.
+const undoStack = [];
+const UNDO_MAX = 30;
+function renderUndo() {
+  const b = $('#btn-undo');
+  if (!b) return;
+  const last = undoStack[undoStack.length - 1];
+  b.disabled = !last;
+  b.title = last ? `Undo: ${last.what} (Ctrl+Z)` : 'Nothing to undo';
+  b.setAttribute('aria-label', last ? `Undo: ${last.what}` : 'Undo (nothing to undo)');
+}
+async function runUndo(entry) {
+  const i = undoStack.indexOf(entry);
+  if (i < 0) return;
+  undoStack.splice(i, 1);
+  renderUndo();
+  try { await entry.run(); toast(`Undone: ${entry.what}`); }
+  catch (e) { if (!(e instanceof AuthError)) toast('Undo failed: ' + e.message); }
+}
+function undoLast() {
+  const last = undoStack[undoStack.length - 1];
+  if (last) runUndo(last); else toast('Nothing to undo.');
+}
+
 function toast(msg, action) {
   const box = $('#toast');
   box.replaceChildren(el('span', {}, msg));
   if (action) {
+    const entry = action.label === 'Undo' ? { what: msg, run: action.run } : null;
+    if (entry) {
+      undoStack.push(entry);
+      undoStack.splice(0, Math.max(0, undoStack.length - UNDO_MAX));
+      renderUndo();
+    }
     const b = el('button', {}, action.label);
-    b.addEventListener('click', () => { box.hidden = true; action.run(); });
+    b.addEventListener('click', () => { box.hidden = true; if (entry) runUndo(entry); else action.run(); });
     box.append(b);
   }
   box.hidden = false;
@@ -1776,7 +1807,7 @@ function show(view) {
   $('#main-row').hidden = view !== 'board';
   $('#signin').hidden = view !== 'signin';
   $('#setup').hidden = view !== 'setup';
-  for (const id of ['btn-compose', 'btn-refresh', 'search-form', 'btn-menu', 'col-picker', 'btn-report']) $('#' + id).hidden = view !== 'board';
+  for (const id of ['btn-undo', 'btn-compose', 'btn-refresh', 'search-form', 'btn-menu', 'col-picker', 'btn-report']) $('#' + id).hidden = view !== 'board';
   $('#sidebar').hidden = !state.sidebarOpen;
   if (view === 'board') renderSidebar();
 }
@@ -2981,6 +3012,13 @@ function disarmDelete() {
 }
 
 function onKey(e) {
+  // Ctrl+Z: undo the last change (in a text field or while writing, the field's own undo instead).
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z'
+      && !e.target.closest?.('input, textarea, [contenteditable], #reader')) {
+    e.preventDefault();
+    undoLast();
+    return;
+  }
   // Typing in a field ignores shortcuts, except Esc inside the email window: it closes it (drafts are kept).
   const escInReader = e.key === 'Escape' && e.target.closest?.('#reader');
   if (e.target.closest?.('input, textarea, dialog') && !escInReader) return;
@@ -3217,6 +3255,7 @@ function wireUi() {
     location.reload();
   });
   document.addEventListener('keydown', onKey);
+  $('#btn-undo').addEventListener('click', undoLast);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && Date.now() - state.lastLoad > 60000) loadBoard();
   });

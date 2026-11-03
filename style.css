@@ -422,8 +422,9 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
   .bar .search-box input { width: 100%; }
   .suggest { width: calc(100vw - 1.5rem) !important; min-width: 0; }
   /* Compose / Refresh / Settings become small icon buttons */
-  #btn-compose, #btn-refresh, #btn-settings { font-size: 0; width: 40px; min-height: 40px; padding: 0; display: inline-grid; place-items: center; }
-  #btn-compose[hidden], #btn-refresh[hidden] { display: none; }
+  #btn-undo, #btn-compose, #btn-refresh, #btn-settings { font-size: 0; width: 40px; min-height: 40px; padding: 0; display: inline-grid; place-items: center; }
+  #btn-undo[hidden], #btn-compose[hidden], #btn-refresh[hidden] { display: none; }
+  #btn-undo::before { content: '↶'; font-size: 1.3rem; }
   #btn-compose::before { content: '✏️'; font-size: 1.05rem; }
   #btn-refresh::before { content: '↻'; font-size: 1.3rem; }
   #btn-settings::before { content: '⚙'; font-size: 1.25rem; }
@@ -467,6 +468,7 @@ button.danger:disabled { opacity: .45; cursor: default; }
 
 /* Report issue */
 .report-btn { font-weight: 600; }
+#btn-undo:disabled { opacity: .45; cursor: default; }
 dialog.report { max-width: 560px; width: calc(100% - 32px); border-radius: 14px; padding: 20px 22px; }
 dialog.report h2 { margin: 0 0 14px; font-size: 20px; }
 .big-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
