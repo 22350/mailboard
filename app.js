@@ -2731,6 +2731,16 @@ function unsubscribeInBody(m, strict = false) {
   }
   return null;
 }
+// The sender's one-click address (RFC 8058). Sent as a form to a new tab, because the page's security
+// rules only let fetch() talk to Google, and that promise is worth keeping. Their reply shows in the tab.
+function postOneClick(url) {
+  const form = el('form', { method: 'POST', action: url, target: '_blank', rel: 'noopener', hidden: '' }, [
+    el('input', { type: 'hidden', name: 'List-Unsubscribe', value: 'One-Click' }),
+  ]);
+  document.body.append(form);
+  form.submit();
+  form.remove();
+}
 function unsubscribedOn() {
   try { return JSON.parse(localStorage.getItem('unsubscribed') || '{}'); } catch { return {}; }
 }
@@ -2746,11 +2756,8 @@ function renderUnsubscribe(msgs, threadId) {
     let done = '';
     try {
       if (u.oneClick) {
-        // The sender's one-click address (RFC 8058). The browser can't read the reply from another site,
-        // so this says "sent", not "done".
-        await fetch(u.web, { method: 'POST', mode: 'no-cors', body: 'List-Unsubscribe=One-Click',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
-        done = `Unsubscribe request sent to ${name}.`;
+        postOneClick(u.web);
+        done = `Unsubscribe request sent to ${name}: their reply opened in a new tab.`;
       } else if (u.mail) {
         const url = new URL(u.mail);
         const to = decodeURIComponent(url.pathname);
