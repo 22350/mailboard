@@ -161,6 +161,10 @@ a { color: var(--accent); }
 }
 .card.open { border-color: var(--accent); }
 .card.dragging { opacity: .4; }
+#drag-ghost { position: fixed; left: 0; top: 0; z-index: 9999; padding: 14px 0 0 14px; pointer-events: none; }
+#drag-ghost[hidden] { display: none; }
+#drag-ghost svg { display: block; width: 44px; height: 44px; fill: var(--accent); opacity: .55; }
+#drag-blank { position: fixed; left: -10px; top: -10px; width: 1px; height: 1px; }
 .card .top { display: flex; align-items: baseline; gap: .4rem; }
 .card .people { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card .num, .card time { color: var(--muted); font-size: .8rem; white-space: nowrap; }

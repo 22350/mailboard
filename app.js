@@ -28,6 +28,7 @@ const COLORS = [
   { name: 'Pink', bg: '#f691b3' },
 ];
 const REFRESH_MS = 2 * 60 * 1000;
+const WATCH_MS = 15 * 1000;
 
 const $ = (sel) => document.querySelector(sel);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -96,6 +97,7 @@ const state = {
   addingColumn: false, // the "new column" name box is open; don't re-render under it
   openId: null,
   dragging: false,
+  watchedHistory: null, // mailbox history number at the last check for new mail
   loading: false,
   lastLoad: 0,
 };
@@ -1343,6 +1345,20 @@ async function loadBoard() {
   }
 }
 
+// New mail shows up by itself: Gmail's mailbox history number changes with every change, and asking for
+// it is cheap, so check it often and only reload the board when it moved. Waits while a reload would get
+// in the way (the change stays unseen, so the next check picks it up).
+async function watchMailbox() {
+  if (document.visibilityState !== 'visible' || !state.token || state.loading || state.dragging
+    || state.addingColumn || state.armedDelete || $('#menu') || $('#color-pop')) return;
+  try {
+    const { historyId } = await api('/profile');
+    const changed = state.watchedHistory && historyId !== state.watchedHistory;
+    state.watchedHistory = historyId;
+    if (changed) await loadBoard();
+  } catch {} // offline or signed out: the banner and the regular refresh deal with it
+}
+
 async function moveThread(id, colIdx) {
   const cols = columns();
   const t = state.threads.get(id);
@@ -1739,6 +1755,37 @@ function icon(name, cls) {
   svg.append(path);
   return svg;
 }
+
+// What follows the pointer while a card is dragged: a see-through mail icon, just below and right of
+// the pointer. It's our own element moved on dragover, with the browser's drag picture blanked,
+// because a custom drag picture doesn't reliably show on every system.
+const dragGhost = {
+  node: null,
+  blank: null,
+  start(e) {
+    if (!this.node) {
+      this.node = el('div', { id: 'drag-ghost', 'aria-hidden': 'true' }, [icon('mail')]);
+      this.blank = el('div', { id: 'drag-blank' });
+      document.body.append(this.node, this.blank);
+      document.addEventListener('dragover', (ev) => this.move(ev), true);
+      document.addEventListener('dragleave', (ev) => { if (!ev.relatedTarget) this.node.hidden = true; }, true);
+      document.addEventListener('drop', () => this.stop(), true);
+      document.addEventListener('dragend', () => this.stop(), true);
+    }
+    e.dataTransfer.setDragImage(this.blank, 0, 0);
+    this.active = true;
+    this.move(e);
+  },
+  move(e) {
+    if (!this.active) return;
+    this.node.style.transform = `translate(${e.clientX}px, ${e.clientY}px)`;
+    this.node.hidden = false;
+  },
+  stop() {
+    this.active = false;
+    if (this.node) this.node.hidden = true;
+  },
+};
 
 function iconButton(label, name, run, text) {
   const b = el('button', { class: 'icon-btn', title: label, 'aria-label': label, draggable: 'false' }, name ? icon(name) : text);
@@ -2171,6 +2218,7 @@ function renderCard(t, colIdx) {
     state.dragging = true;
     e.dataTransfer.setData('text/plain', t.id);
     e.dataTransfer.effectAllowed = 'move';
+    dragGhost.start(e);
     card.classList.add('dragging');
   });
   card.addEventListener('dragend', () => { state.dragging = false; card.classList.remove('dragging'); });
@@ -3426,8 +3474,11 @@ function wireUi() {
   $('#btn-undo').addEventListener('click', undoLast);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && Date.now() - state.lastLoad > 60000) loadBoard();
+    else watchMailbox();
   });
+  addEventListener('focus', watchMailbox);
   setInterval(() => { if (document.visibilityState === 'visible') loadBoard(); }, REFRESH_MS);
+  setInterval(watchMailbox, WATCH_MS);
 }
 
 async function start() {
