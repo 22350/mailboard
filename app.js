@@ -37,13 +37,31 @@ const RENEW_LAST_MS = 60 * 1000;
 const $ = (sel) => document.querySelector(sel);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Everything saved belongs to one Gmail account ("me@gmail.com|columns"), so a second person signing in on
+// the same browser starts fresh and nothing of the first person's reaches their Gmail. Only these two are
+// for the browser as a whole: 'email' is whoever signed in last.
+const BROWSER_KEYS = new Set(['clientId', 'email']);
 const store = {
+  account: '',
+  key(key) { return BROWSER_KEYS.has(key) || !this.account ? key : `${this.account}|${key}`; },
   get(key, fallback) {
-    try { const v = localStorage.getItem(key); return v == null ? fallback : JSON.parse(v); }
+    try { const v = localStorage.getItem(this.key(key)); return v == null ? fallback : JSON.parse(v); }
     catch { return fallback; }
   },
-  set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} },
+  set(key, value) { try { localStorage.setItem(this.key(key), JSON.stringify(value)); } catch {} },
 };
+
+// Settings saved before they were per account belong to the account that signed in first ('email').
+store.account = store.get('email', '');
+if (store.account) {
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (BROWSER_KEYS.has(key) || key.includes('|')) continue;
+      if (localStorage.getItem(`${store.account}|${key}`) == null) localStorage.setItem(`${store.account}|${key}`, localStorage.getItem(key));
+      localStorage.removeItem(key);
+    }
+  } catch {}
+}
 
 // StediMail's own Google sign-in client, used on stedimail.com (and when testing locally), so testers just
 // click Sign in. A Client ID isn't a secret. Anyone hosting their own copy pastes theirs (see README).
@@ -197,6 +215,9 @@ function needSignIn() {
 function signOut() {
   if (state.token) google.accounts.oauth2.revoke(state.token, () => {});
   state.token = null;
+  state.me = '';                // the next sign-in can be anyone; start() checks who it is
+  store.set('email', '');
+  store.account = '';
   state.threads.clear();
   try { sessionStorage.removeItem('token'); } catch {}
   closeReader();
@@ -238,14 +259,12 @@ async function adoptColumns() {
   const { labels = [] } = await api('/labels');
   const board = labels.filter((l) => l.name.startsWith(LABEL_PREFIX) && !l.name.startsWith(COLOR_PREFIX)
     && l.name.length > LABEL_PREFIX.length && !l.name.slice(LABEL_PREFIX.length).includes('/'));
-  // Old To Do / Waiting / Done labels left from the first-version defaults: skip them if they're empty.
+  // Empty labels aren't columns worth bringing back: leftovers like the first version's To Do / Waiting /
+  // Done, or another person's columns once added to this Gmail by mistake. They stay offered under +.
   const kept = [];
   for (const l of board) {
-    const n = l.name.slice(LABEL_PREFIX.length);
-    if (USUAL_ORDER.includes(n)) {
-      try { if ((await api(`/labels/${l.id}`)).threadsTotal === 0) continue; } catch {}
-    }
-    kept.push(n);
+    try { if ((await api(`/labels/${l.id}`)).threadsTotal === 0) continue; } catch (e) { if (e instanceof AuthError) throw e; }
+    kept.push(l.name.slice(LABEL_PREFIX.length));
   }
   const names = kept;
   const rank = (n) => { const i = USUAL_ORDER.indexOf(n); return i < 0 ? USUAL_ORDER.length : i; };
@@ -2792,7 +2811,7 @@ function postOneClick(url) {
   form.remove();
 }
 function unsubscribedOn() {
-  try { return JSON.parse(localStorage.getItem('unsubscribed') || '{}'); } catch { return {}; }
+  return store.get('unsubscribed', {});
 }
 function renderUnsubscribe(msgs, threadId) {
   const u = unsubscribeOf(msgs);
@@ -2819,7 +2838,7 @@ function renderUnsubscribe(msgs, threadId) {
       }
       const all = unsubscribedOn();
       all[addr] = new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-      try { localStorage.setItem('unsubscribed', JSON.stringify(all)); } catch {}
+      store.set('unsubscribed', all);
       btn.textContent = 'Unsubscribe requested';
       btn.disabled = true;
       // Unsubscribed: the email goes to Trash too (Paul, 2026-11-03); Undo brings the email back.
@@ -3542,20 +3561,28 @@ function wireUi() {
 }
 
 async function start() {
+  // Who actually signed in? A different account than the settings just loaded: load theirs instead, before
+  // anything can touch their Gmail. (The sign-in is kept for this tab, so the reload doesn't ask again.)
+  let email;
+  try {
+    email = (await api('/profile')).emailAddress;
+  } catch (e) {
+    if (!(e instanceof AuthError)) toast(e.message);
+    return;
+  }
+  if (email !== state.me) {
+    store.set('email', email);
+    if (store.get('email', '') === email) { location.reload(); return; }
+    state.me = email;           // this browser isn't saving anything: carry on with an empty board
+    settings.columns = [];
+    settings.columnLabels = {};
+    settings.columnsSaved = false;
+  }
   applyColumnWidth(settings.colWidth);
   applyReaderWidth(settings.readerWidth);
   setupReaderResize();
   setupCopyFloat();
   show('board');
-  if (!state.me) {
-    try {
-      state.me = (await api('/profile')).emailAddress;
-      store.set('email', state.me);
-    } catch (e) {
-      if (!(e instanceof AuthError)) toast(e.message);
-      return;
-    }
-  }
   await loadBoard();
 }
 
