@@ -39,7 +39,7 @@ a { color: var(--accent); }
 }
 .bar h1 { font-size: 1.15rem; margin: 0 .55rem 0 .35rem; padding: .3rem 0; line-height: 0; }
 /* The StediMail logo (white), its letters 30% taller than the old 1.15rem title's (Paul, 2026-11-03) */
-.bar h1 .logo { display: block; height: 1.3rem; width: auto; }
+.bar h1 .logo { display: block; height: 1.5rem; width: auto; }
 .bar .status { color: var(--bar-muted); }
 .bar button {
   background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.22); color: var(--bar-text);
@@ -223,12 +223,12 @@ a { color: var(--accent); }
 .card-actions .icon-btn { opacity: .85; }
 .card-actions .icon-btn:hover:not(:disabled), .card-actions .icon-btn:focus-visible {
   opacity: 1; background: color-mix(in srgb, var(--col) 85%, transparent); }
-.card-actions .icon-btn { width: 42px; min-height: 42px; border-radius: 10px; }
+.card-actions .icon-btn { width: 36px; min-height: 36px; border-radius: 8px; }   /* less space round the 23 px icons */
 .card-actions .icon-btn svg { width: 23px; height: 23px; }
 /* A blank strip across the top of each card where those buttons appear, so they never cover the sender
    or subject (Paul, 2026-11-03). Touch screens show them below the text instead, so no strip there. */
 @media (hover: hover) {
-  .card { padding-top: calc(42px + .45rem); }
+  .card { padding-top: calc(36px + .45rem); }
 }
 @media (hover: none) {
   .card-actions { position: static; display: flex; justify-content: flex-end; margin-top: .3rem; }
@@ -439,7 +439,7 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 @media (max-width: 640px) {
   .bar { flex-wrap: wrap; row-gap: .5rem; padding: .5rem .75rem; }
   .bar h1 { display: block; font-size: 1.05rem; }
-  .bar h1 .logo { height: 1.2rem; }
+  .bar h1 .logo { height: 1.35rem; }
   .bar .status, .bar .spacer { display: none; }
   .bar h1 { margin-right: auto; }
   .bar .search-box { order: 10; flex: 1 0 100%; }
