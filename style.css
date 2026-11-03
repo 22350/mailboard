@@ -215,7 +215,7 @@ a { color: var(--accent); }
 }
 .card:hover .card-actions, .card:focus-within .card-actions { display: flex; }
 /* Bigger hover buttons on cards, easier to hit (Paul, 2026-11-03): 34 → 42 px, icons 18 → 23 px */
-.card-actions { gap: .3rem; top: .25rem; right: .25rem; padding: .15rem .2rem .15rem .4rem;
+.card-actions { gap: .15rem; top: .15rem; right: .2rem; padding: .05rem .1rem .05rem .3rem;
   /* see-through, so the sender and subject underneath stay readable (Paul, 2026-11-03) */
   background: color-mix(in srgb, var(--panel) 40%, transparent); }
 .card-actions .icon-btn { opacity: .85; }
@@ -226,7 +226,7 @@ a { color: var(--accent); }
 /* A blank strip across the top of each card where those buttons appear, so they never cover the sender
    or subject (Paul, 2026-11-03). Touch screens show them below the text instead, so no strip there. */
 @media (hover: hover) {
-  .card { padding-top: calc(42px + .7rem); }
+  .card { padding-top: calc(42px + .45rem); }
 }
 @media (hover: none) {
   .card-actions { position: static; display: flex; justify-content: flex-end; margin-top: .3rem; }
