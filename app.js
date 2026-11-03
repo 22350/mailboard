@@ -710,7 +710,7 @@ async function runBulk(action, arg) {
     if (all) {
       const t = all.total;
       const howMany = t ? `${t.exact ? '' : 'about '}${t.n.toLocaleString()}` : 'all';
-      if (!confirm(`${change.verb}: ${howMany} conversations in ${all.scope.name}. Continue?`)) return;
+      if (!await askConfirm(`${change.verb}: ${howMany} conversations in ${all.scope.name}. Continue?`, change.verb)) return;
       const ids = await listAllMessageIds(all.scope);
       await batchModify(ids, change.add, change.remove);
       count = t ? t.n : ids.length;
@@ -747,7 +747,7 @@ async function bulkDeleteForever(all) {
   }
   const t = all.total;
   const howMany = t ? `${t.exact ? '' : 'about '}${t.n.toLocaleString()}` : 'all';
-  if (!confirm(`Delete ${howMany} conversations in ${all.scope.name} forever? This can't be undone.`)) return;
+  if (!await askConfirm(`Delete ${howMany} conversations in ${all.scope.name} forever? This can't be undone.`, 'Delete forever')) return;
   try {
     const ids = await listAllMessageIds(all.scope);
     for (let i = 0; i < ids.length; i += 1000) {
@@ -1105,6 +1105,30 @@ async function renameUserLabel(l) {
   if (wasShowing) state.folder = name;
 }
 
+// Yes/no for things that can't be undone. Not the browser's confirm(): there OK has the focus, so a stray
+// or repeated Enter/Space (a shaky key press, a voice-typing key) says yes before it's read. Here Cancel
+// has the focus, the OK button only works after ARM_MS, and Esc or a click outside cancels.
+const ARM_MS = 900;
+function askConfirm(message, okLabel = 'OK') {
+  return new Promise((resolve) => {
+    const dlg = el('dialog', { class: 'ask', 'aria-label': 'Please confirm' });
+    const cancel = el('button', { type: 'button' }, 'Cancel');
+    const ok = el('button', { type: 'button', class: 'danger', disabled: '' }, okLabel);
+    const parts = String(message).split('\n\n');
+    dlg.append(...parts.map((p, i) => el('p', { class: i ? 'hint' : '' }, p)), el('div', { class: 'ask-buttons' }, [cancel, ok]));
+    let done = false;
+    const finish = (yes) => { if (done) return; done = true; dlg.close(); dlg.remove(); resolve(yes); };
+    cancel.addEventListener('click', () => finish(false));
+    ok.addEventListener('click', () => { if (!ok.disabled) finish(true); });
+    dlg.addEventListener('cancel', (e) => { e.preventDefault(); finish(false); });
+    dlg.addEventListener('click', (e) => { if (e.target === dlg) finish(false); });   // the backdrop
+    document.body.append(dlg);
+    dlg.showModal();
+    cancel.focus();
+    setTimeout(() => ok.removeAttribute('disabled'), ARM_MS);
+  });
+}
+
 // Every message with a label (not Spam/Trash), for putting them back in the Inbox before the label goes.
 async function messagesWithLabel(id) {
   const ids = [];
@@ -1121,7 +1145,7 @@ async function removeUserLabel(l) {
   let ids = [];
   try { ids = await messagesWithLabel(l.id); } catch (e) { if (e instanceof AuthError) return; }
   const what = ids.length ? `\n\nIts ${ids.length} email${ids.length === 1 ? '' : 's'} will go back to your Inbox.` : '\n\nIt has no emails.';
-  if (!confirm(`Remove the label “${l.name}”?${what}`)) return;
+  if (!await askConfirm(`Remove the label “${l.name}”?${what}`, 'Remove label')) return;
   try {
     for (let i = 0; i < ids.length; i += 1000) {      // back to the Inbox first, so nothing ends up out of sight
       await api('/messages/batchModify', { method: 'POST', body: { ids: ids.slice(i, i + 1000), addLabelIds: ['INBOX'] } });
@@ -1445,7 +1469,7 @@ async function trashThread(id) {
 // Permanently delete threads that are already in Trash. No undo.
 async function deleteForever(threadIds) {
   const n = threadIds.length;
-  if (!confirm(`Delete ${n === 1 ? 'this conversation' : n.toLocaleString() + ' conversations'} forever? This can't be undone.`)) return false;
+  if (!await askConfirm(`Delete ${n === 1 ? 'this conversation' : n.toLocaleString() + ' conversations'} forever? This can't be undone.`, 'Delete forever')) return false;
   try {
     setStatus(n > 1 ? 'Deleting…' : '');
     await mapLimit(threadIds, 5, (id) => api(`/threads/${id}`, { method: 'DELETE' }));
