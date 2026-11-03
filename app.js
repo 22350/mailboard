@@ -706,7 +706,10 @@ async function runBulk(action, arg) {
   // Everything in a labelled column (not the Inbox, not a search), so deleting it all closes the column
   // too (Paul, 2026-11-03: "if I select all in a labeled column and delete everything, I want the column
   // to close").
-  const whole = all ? all.key : (() => { const k = fullySelectedColumn(); return k !== undefined && !state.more[k] ? k : undefined; })();
+  const whole = all ? all.key : (() => {
+    const k = fullySelectedColumn();
+    return k !== undefined && !(k < 0 ? state.search?.more : state.more[k]) ? k : undefined;
+  })();
   try {
     const change = await bulkChange(action, arg);
     let count;
@@ -740,6 +743,8 @@ async function runBulk(action, arg) {
     });
     // Its Undo (and Ctrl+Z) brings the column back; the next one brings the emails back.
     if (action === 'trash' && whole > 0 && whole < columns().length) await removeColumn(whole, true);
+    // A sidebar folder or search (Promotions, …) shown as the left column: emptied, it closes too.
+    if (action === 'trash' && whole < 0 && state.search) clearSearch();
   } catch (e) {
     setStatus('');
     if (!(e instanceof AuthError)) toast('Could not update: ' + e.message);
