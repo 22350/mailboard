@@ -1105,15 +1105,34 @@ async function renameUserLabel(l) {
   if (wasShowing) state.folder = name;
 }
 
+// Every message with a label (not Spam/Trash), for putting them back in the Inbox before the label goes.
+async function messagesWithLabel(id) {
+  const ids = [];
+  let page = '';
+  do {
+    const r = await api(`/messages?${new URLSearchParams({ labelIds: id, maxResults: '500', ...(page ? { pageToken: page } : {}) })}`);
+    for (const m of r.messages || []) ids.push(m.id);
+    page = r.nextPageToken || '';
+  } while (page);
+  return ids;
+}
+
 async function removeUserLabel(l) {
-  if (!confirm(`Remove the label “${l.name}”?\n\nThe emails stay in Gmail; they just lose this label.`)) return;
+  let ids = [];
+  try { ids = await messagesWithLabel(l.id); } catch (e) { if (e instanceof AuthError) return; }
+  const what = ids.length ? `\n\nIts ${ids.length} email${ids.length === 1 ? '' : 's'} will go back to your Inbox.` : '\n\nIt has no emails.';
+  if (!confirm(`Remove the label “${l.name}”?${what}`)) return;
   try {
+    for (let i = 0; i < ids.length; i += 1000) {      // back to the Inbox first, so nothing ends up out of sight
+      await api('/messages/batchModify', { method: 'POST', body: { ids: ids.slice(i, i + 1000), addLabelIds: ['INBOX'] } });
+    }
     await api(`/labels/${l.id}`, { method: 'DELETE' });
     state.userLabels = state.userLabels.filter((x) => x.id !== l.id);
     state.spareBoardLabels = (state.spareBoardLabels || []).filter((n) => LABEL_PREFIX + n !== l.name);
     if (state.folder === l.name) clearSearch();
     renderSidebar();
-    toast(`Removed label “${l.name}”`);
+    toast(ids.length ? `Removed label “${l.name}”. ${ids.length} email${ids.length === 1 ? '' : 's'} back in your Inbox.` : `Removed label “${l.name}”`);
+    if (ids.length) loadBoard();
   } catch (e) {
     if (!(e instanceof AuthError)) toast('Could not remove label: ' + e.message);
   }
