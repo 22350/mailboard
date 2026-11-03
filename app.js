@@ -703,6 +703,10 @@ async function runBulk(action, arg) {
   if (action === 'trash' && (all ? all.scope.labelIds === 'TRASH' : state.searchArgs?.folder?.label === 'TRASH')) {
     return bulkDeleteForever(all);
   }
+  // Everything in a labelled column (not the Inbox, not a search), so deleting it all closes the column
+  // too (Paul, 2026-11-03: "if I select all in a labeled column and delete everything, I want the column
+  // to close").
+  const whole = all ? all.key : (() => { const k = fullySelectedColumn(); return k !== undefined && !state.more[k] ? k : undefined; })();
   try {
     const change = await bulkChange(action, arg);
     let count;
@@ -734,6 +738,8 @@ async function runBulk(action, arg) {
         catch (e) { if (!(e instanceof AuthError)) toast('Undo failed: ' + e.message); }
       },
     });
+    // Its Undo (and Ctrl+Z) brings the column back; the next one brings the emails back.
+    if (action === 'trash' && whole > 0 && whole < columns().length) await removeColumn(whole, true);
   } catch (e) {
     setStatus('');
     if (!(e instanceof AuthError)) toast('Could not update: ' + e.message);
@@ -1865,16 +1871,17 @@ function saveColumnList(list) {
   loadBoard();
 }
 
-async function removeColumn(i) {
+async function removeColumn(i, afterDelete = false) {
   const before = [...settings.columns];
   const name = before[i - 1];
+  const said = (normal) => afterDelete ? `Moved everything in “${name}” to Trash and closed the column.` : normal;
   const id = state.labelIds[name];
   const own = isOwnLabel(name);
   const beforeLabels = { ...settings.columnLabels };
   const undo = () => { settings.columnLabels = beforeLabels; saveColumnList(before); };
   saveColumnList(before.filter((_, k) => k !== i - 1));
   if (own) {               // one of their own labels: it stays exactly as it was in Gmail
-    toast(`Removed the “${name}” column. Your label is unchanged.`, { label: 'Undo', run: undo });
+    toast(said(`Removed the “${name}” column. Your label is unchanged.`), { label: 'Undo', run: undo });
     return;
   }
   // An empty StediMail column's label is deleted too, so nothing is left behind; one with emails keeps it.
@@ -1884,11 +1891,11 @@ async function removeColumn(i) {
     try {
       await api(`/labels/${id}`, { method: 'DELETE' });
       delete state.labelIds[name];
-      toast(`Removed “${name}” and its empty Gmail label.`, { label: 'Undo', run: undo });
+      toast(said(`Removed “${name}” and its empty Gmail label.`), { label: 'Undo', run: undo });
       return;
     } catch {}
   }
-  toast(`Removed “${name}”. Its emails keep the label in Gmail.`, { label: 'Undo', run: undo });
+  toast(said(`Removed “${name}”. Its emails keep the label in Gmail.`), { label: 'Undo', run: undo });
 }
 
 function addColumn(name) {
