@@ -2751,6 +2751,35 @@ function renderMessages(msgs) {
   return box;
 }
 
+// "Install StediMail" in the top bar, only in a normal browser tab where the browser can install it
+// (Paul, 2026-11-03: testers opening stedimail.com kept Chrome's address and bookmark bars). Gone once it
+// is installed or opened as an app.
+function setupInstallButton() {
+  const btn = $('#btn-install');
+  const asApp = () => matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: window-controls-overlay)').matches
+    || navigator.standalone === true;
+  let offer = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();                       // keep it for our button instead of the browser's own pop-up
+    offer = e;
+    btn.hidden = asApp();
+  });
+  window.addEventListener('appinstalled', () => { offer = null; btn.hidden = true; toast('StediMail is installed: open it from your apps.'); });
+  // Safari on iPhone/iPad never offers it: show how to do it by hand.
+  const iosSafari = /iP(hone|ad|od)/.test(navigator.userAgent) && !/CriOS|FxiOS|EdgiOS/.test(navigator.userAgent);
+  if (iosSafari && !asApp()) btn.hidden = false;
+  btn.addEventListener('click', async () => {
+    if (offer) {
+      offer.prompt();
+      const { outcome } = await offer.userChoice;
+      if (outcome === 'accepted') btn.hidden = true;
+      offer = null;
+    } else if (iosSafari) {
+      toast('In Safari: tap Share (the square with an arrow), then “Add to Home Screen”.');
+    }
+  });
+}
+
 function readerHead(title) {
   const close = el('button', { 'aria-label': 'Close' }, '✕');
   close.addEventListener('click', closeReader);
@@ -3451,6 +3480,7 @@ async function checkForUpdate() {
 function watchForUpdates() {
   // The service worker is what lets the browser offer "Install StediMail".
   navigator.serviceWorker?.register('sw.js').catch(() => {});
+  setupInstallButton();
   if (!VERSION) return;
   setInterval(checkForUpdate, 5 * 60 * 1000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForUpdate(); });
