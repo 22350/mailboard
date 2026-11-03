@@ -2429,6 +2429,8 @@ function renderActions(box, id) {
       ? iconButton('Mark as read', 'read', () => toggleRead(id))
       : iconButton('Mark as unread', 'unread', () => toggleRead(id)),
     gmail,
+    // Unsubscribe sits right after "Open in Gmail" (Paul, 2026-11-03), kept when this row is redrawn.
+    ...(state.unsub?.id === id ? [state.unsub.el] : []),
   );
 }
 
@@ -2780,10 +2782,11 @@ async function openThread(id) {
     if (state.openId !== id) return;
     if (!msgs.length && draft) { openCompose(draft); return; }   // a new-message draft, not a reply
     const actions = el('div', { class: 'actions', id: 'reader-actions' });
+    const unsub = renderUnsubscribe(msgs, id);
+    state.unsub = unsub ? { id, el: unsub } : null;
     renderActions(actions, id);
     reader.replaceChildren(
       readerHead(header(msgs[0] || {}, 'subject') || '(no subject)'),
-      ...[renderUnsubscribe(msgs, id)].filter(Boolean),
       actions,
       renderMessages(msgs),
       renderReplyBox(msgs[msgs.length - 1] || draftMsg, id, draft),

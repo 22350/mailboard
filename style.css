@@ -505,7 +505,7 @@ dialog.report pre { white-space: pre-wrap; font-size: 12px; max-height: 180px; o
 /* each message in an open email shows its subject */
 .message summary .msg-subject { font-weight: 700; font-size: 1.02em; margin: 2px 0 1px; }
 /* Unsubscribe, right under the subject (advertising / update emails only) */
-.unsub { display: flex; gap: .45rem; align-items: center; margin: .35rem 0 .1rem; }
+.unsub { display: inline-flex; gap: .45rem; align-items: center; margin: 0 0 0 .6rem; }
 /* 30% smaller, with a slight red tint (Paul, 2026-11-03) */
 .unsub .unsub-btn { font-weight: 600; font-size: .7rem; min-height: 25px; padding: 0 .63rem; border-radius: 6px;
   background: rgba(220, 60, 60, .16); border: 1px solid rgba(220, 60, 60, .45); color: inherit; }
