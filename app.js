@@ -105,6 +105,8 @@ const state = {
   colorIds: {},        // color name -> Gmail label id (created on first use)
   nestLabels: new Map(), // parent thread id -> id of its hidden nesting label
   nestParents: new Map(), // hidden nesting label id -> parent thread id
+  cardLabels: new Map(), // thread id -> { id of its hidden label, text } for labels typed on cards
+  cardLabelSaves: new Map(), // the same, for ones still being saved (null = being removed)
   nestFlagId: null,    // hidden label on every thread in a nest, so they're loaded even when old
   nestOf: new Map(),   // nested thread id -> parent, as shown on the board now
   nestKids: new Map(), // parent thread id -> nested thread ids, as shown on the board now
@@ -338,6 +340,14 @@ async function ensureLabels(cols) {
     state.nestParents.set(l.id, l.name.slice(NEST_PREFIX.length));
   }
   state.nestFlagId = labels.find((l) => l.name === NEST_FLAG)?.id || null;
+  const cardLabels = new Map();
+  for (const l of labels) {
+    if (!l.name.startsWith(CARD_LABEL_PREFIX)) continue;
+    const [threadId, code] = l.name.slice(CARD_LABEL_PREFIX.length).split('/');
+    try { cardLabels.set(threadId, { id: l.id, text: decodeCardLabel(code) }); } catch {}
+  }
+  state.cardLabelSaves.forEach((saving, id) => { if (saving) cardLabels.set(id, saving); else cardLabels.delete(id); });
+  state.cardLabels = cardLabels;
   state.allUserLabels = ownLabelChoices(labels);
   // StediMail's spare column labels (Board/<name> that isn't a column now), for the + suggestions.
   const inUse = new Set(cols.filter((c) => !c.inbox).map((c) => labelNameOf(c.name)));
@@ -555,6 +565,12 @@ function openSortMenu(anchor, col) {
 // comes back under its parent if they meet again (e.g. Undo after deleting the parent).
 const NEST_PREFIX = 'Mailboard/Nest/';
 const NEST_FLAG = 'Mailboard/Nested';
+// A card's own label, typed in the strip above its sender. Its text and thread are both in the name of a
+// hidden Gmail label, so it follows Paul to other computers; the label is never put on the email itself.
+const CARD_LABEL_PREFIX = 'Mailboard/CardLabel/';
+const encodeCardLabel = (text) => btoa(String.fromCharCode(...new TextEncoder().encode(text)))
+  .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const decodeCardLabel = (code) => new TextDecoder().decode(b64urlBytes(code));
 const NEST_COLLAPSED = store.get('nestCollapsed', {});
 const hiddenLabel = (name) => api('/labels', { method: 'POST', body: { name, labelListVisibility: 'labelHide', messageListVisibility: 'hide' } });
 const nestLabelIdsOn = (t) => [...t.labels].filter((l) => state.nestParents.has(l));
@@ -1533,7 +1549,7 @@ function bringInboxToTop() {
 }
 
 async function loadBoard() {
-  if (state.loading || state.dragging || state.addingColumn || !state.token) return;
+  if (state.loading || state.dragging || state.addingColumn || state.typingCardLabel || !state.token) return;
   state.loading = true;
   setStatus('Loading…');
   try {
@@ -1591,7 +1607,7 @@ async function loadBoard() {
 async function watchMailbox() {
   if (document.visibilityState === 'visible') renewSignIn();
   if (document.visibilityState !== 'visible' || !state.token || state.loading || state.dragging
-    || state.addingColumn || state.armedDelete || $('#menu') || $('#color-pop')) return;
+    || state.addingColumn || state.typingCardLabel || state.armedDelete || $('#menu') || $('#color-pop')) return;
   try {
     const { historyId } = await api('/profile');
     const changed = state.watchedHistory && historyId !== state.watchedHistory;
@@ -2481,6 +2497,7 @@ function renderCard(t, colIdx) {
     ]),
     t.attachments ? el('div', { class: 'clip' }, [icon('clip'), String(t.attachments)]) : null,
     snoozedLabelOf(t) ? el('div', { class: 'snoozed' }, [icon('clock'), 'Back ' + whenLabel(snoozedLabelOf(t).due)]) : null,
+    cardLabelField(t, () => card),
     el('div', { class: 'card-actions' }, [
       iconButton('Color', 'palette', (b) => openColorPicker(b, t.id)),
       iconButton('Snooze', 'clock', (b) => openSnoozeMenu(b, t.id)),
@@ -2526,6 +2543,54 @@ function renderCard(t, colIdx) {
   card.addEventListener('dragend', () => { state.dragging = false; state.dragId = null; clearNestTarget(); card.classList.remove('dragging'); });
   card.addEventListener('click', () => openThread(t.id));
   return card;
+}
+
+function showCardLabel(id) {
+  const text = state.cardLabels.get(id)?.text || '';
+  document.querySelectorAll(`.card[data-id="${id}"] .card-label`).forEach((input) => { input.value = text; });
+}
+
+async function saveCardLabel(id, text) {
+  const old = state.cardLabels.get(id);
+  if ((old?.text || '') === text) return;
+  const name = `${CARD_LABEL_PREFIX}${id}/${encodeCardLabel(text)}`;
+  if (name.length > 225) { toast('That label is too long'); showCardLabel(id); return; }   // Gmail's limit
+  const saving = text ? { id: null, text } : null;
+  state.cardLabelSaves.set(id, saving);
+  if (saving) state.cardLabels.set(id, saving); else state.cardLabels.delete(id);
+  showCardLabel(id);
+  try {
+    if (saving) saving.id = (await hiddenLabel(name)).id;
+    if (old?.id) await api(`/labels/${old.id}`, { method: 'DELETE' }).catch((e) => { if (!saving) throw e; });
+  } catch (e) {
+    if (old) state.cardLabels.set(id, old); else state.cardLabels.delete(id);
+    showCardLabel(id);
+    if (!(e instanceof AuthError)) toast('Could not save the label: ' + e.message);
+  } finally {
+    if (state.cardLabelSaves.get(id) === saving) state.cardLabelSaves.delete(id);
+  }
+}
+
+// Typed in place on the card: Enter or clicking away saves, Esc cancels, and an empty field removes it.
+function cardLabelField(t, card) {
+  const input = el('input', { class: 'card-label', type: 'text', placeholder: 'Label', 'aria-label': 'Label', maxlength: '80' });
+  input.value = state.cardLabels.get(t.id)?.text || '';
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('focus', () => {
+    state.typingCardLabel = true;
+    card().draggable = false;                            // so dragging in the field selects text
+  });
+  input.addEventListener('blur', () => {
+    state.typingCardLabel = false;
+    card().draggable = true;
+    saveCardLabel(t.id, input.value.trim());
+  });
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') input.blur();
+    if (e.key === 'Escape') { showCardLabel(t.id); input.blur(); }
+  });
+  return input;
 }
 
 // The arrow on a parent card: shows or hides the emails under it, and says how many (and how many unread).
@@ -3961,7 +4026,7 @@ const VERSION = /[?&]v=(\d+)/.exec(document.querySelector('script[src*="app.js"]
 let updateOffered = false;
 
 function canReloadQuietly() {
-  if (state.dragging || state.addingColumn || state.selected.size || state.search) return false;
+  if (state.dragging || state.addingColumn || state.typingCardLabel || state.selected.size || state.search) return false;
   if (!$('#reader').hidden || $('#menu') || $('#color-pop') || $('#status').textContent) return false;
   return ![...document.querySelectorAll('input, textarea')].some((f) =>
     (f.type !== 'checkbox' && f.value && f === document.activeElement) || (f.tagName === 'TEXTAREA' && f.value.trim()));

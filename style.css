@@ -245,6 +245,23 @@ a { color: var(--accent); }
 @media (hover: hover) {
   .card { padding-top: calc(36px + .45rem); }
 }
+/* A card's own label, in that strip. The hover buttons float over it, as over everything else, except
+   while typing. An empty one only shows on hover, with the buttons. */
+.card-label {
+  height: 36px; padding: 0 .35rem; border: 1px solid transparent; background: transparent;
+  font-size: .95rem; font-weight: 600; text-overflow: ellipsis; cursor: text;
+}
+.card-label::placeholder { color: rgba(0, 0, 0, .5); font-weight: 400; }
+@media (prefers-color-scheme: dark) {
+  .card-label::placeholder { color: rgba(255, 255, 255, .5); }
+}
+.card-label:focus { border-color: var(--accent); background: var(--panel); outline: none; }
+.card .card-label:focus ~ .card-actions { display: none; }
+@media (hover: hover) {
+  .card-label { position: absolute; top: .15rem; left: .5rem; width: calc(100% - .7rem); }
+  .card-label:placeholder-shown { display: none; }
+  .card:hover .card-label { display: block; }
+}
 @media (hover: none) {
   .card-actions { position: static; display: flex; justify-content: flex-end; margin-top: .3rem; }
 }
