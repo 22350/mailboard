@@ -37,7 +37,10 @@ a { color: var(--accent); }
   display: flex; align-items: center; gap: .6rem; padding: .6rem 1rem;
   background: var(--bar-bg); color: var(--bar-text);
 }
-.bar h1 { font-size: 1.15rem; margin: 0 .55rem 0 .35rem; padding: .3rem 0; line-height: 0; }
+/* Equal sides, so the search box between them sits in the middle of the window */
+.bar-side { flex: 1 1 0; display: flex; align-items: center; gap: .6rem; }
+.bar .status { white-space: nowrap; }
+.bar h1 { font-size: 1.15rem; margin: 0 .895rem 0 .635rem; padding: .57rem 0; line-height: 0; }
 /* The StediMail logo (white), 30% larger again (Paul, 2026-11-04) */
 .bar h1 .logo { display: block; height: 2.35rem; width: auto; }
 .bar .status { color: var(--bar-muted); }
@@ -67,6 +70,7 @@ a { color: var(--accent); }
   border: 1px solid var(--border); border-radius: 10px; padding: 0 .45rem;
 }
 .spacer { flex: 1; }
+.search-row-break { display: none; }
 .banner { background: #fff3cd; color: #5c4400; padding: .6rem 1rem; display: flex; gap: 1rem; align-items: center; }
 
 .main-row { flex: 1; display: flex; min-height: 0; }
@@ -132,7 +136,7 @@ a { color: var(--accent); }
 .menu-swatches { display: flex; flex-wrap: wrap; gap: .35rem; padding: .2rem 1rem .4rem; }
 .menu-swatches .swatch { width: 28px; min-height: 28px; }
 @media (max-width: 800px) {
-  .sidebar { position: fixed; top: 56px; bottom: 0; left: 0; z-index: 9; width: 236px; box-shadow: 4px 0 16px rgba(0,0,0,.2); }
+  .sidebar { position: fixed; top: var(--bar-h, 56px); bottom: 0; left: 0; z-index: 9; width: 236px; box-shadow: 4px 0 16px rgba(0,0,0,.2); }
 }
 .column {
   flex: 1 0 290px; max-width: 420px; display: flex; flex-direction: column; min-height: 0;
@@ -500,14 +504,28 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 .card.delete-armed { outline: 2px solid #e05555; outline-offset: -2px; background: rgba(224, 85, 85, .12); }
 .card .delete-hint { margin-top: .35rem; font-size: .8rem; font-weight: 600; color: #e05555; }
 
+/* The search box may sit mid-window on its own row: suggestions wider than it stay centered under it. */
+@media (max-width: 1100px) {
+  .search-box .suggest { left: 50%; transform: translateX(-50%); }
+}
+/* Too narrow for the search box between the two sides: it takes its own row, rather than shrinking away. */
+@media (min-width: 641px) and (max-width: 1100px) {
+  .bar { flex-wrap: wrap; row-gap: .5rem; }
+  .bar .search-row-break { display: block; order: 9; flex: 0 0 100%; height: 0; }
+  .bar .search-box { order: 10; flex: 0 1 360px; margin-inline: auto; }
+  .bar .status { display: none; }
+}
+
 /* ---------- Phones: two-row top bar, one column per screen (swipe snaps), full-screen email ---------- */
 @media (max-width: 640px) {
   .bar { flex-wrap: wrap; row-gap: .5rem; padding: .5rem .75rem; }
+  .bar-side { display: contents; }
   .bar h1 { display: block; font-size: 1.05rem; }
   .bar h1 .logo { height: 2.1rem; }
   .bar .status, .bar .spacer { display: none; }
   .bar h1 { margin-right: auto; }
-  .bar .search-box { order: 10; flex: 1 0 100%; }
+  .bar .search-row-break { display: block; order: 9; flex: 0 0 100%; height: 0; }
+  .bar .search-box { order: 10; flex: 0 1 360px; margin-inline: auto; }
   .bar .col-picker { color: var(--bar-text); }
   .bar .search-box input { width: 100%; }
   .suggest { width: calc(100vw - 1.5rem) !important; min-width: 0; }
