@@ -1974,6 +1974,7 @@ function el(tag, attrs = {}, children = []) {
 
 const ICONS = {
   sort: 'M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z',
+  mic: 'M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z',
   widen: 'M4 12l4-4v3h8V8l4 4-4 4v-3H8v3z',
   person: 'M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z',
   mail: 'M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z',
@@ -2879,10 +2880,81 @@ function richEditor(placeholder, changed) {
   };
 }
 
+// Dictation: the browser's own speech recognition types into the editor at the cursor. Listening ends on a
+// click or when the browser hears silence, so the microphone never stays on unattended. Browsers without
+// speech recognition (Firefox) get no buttons. There are two: a small one in the toolbar, always there, and
+// a big one centered in an empty editor, which goes away at a touch anywhere else in the reply window.
+function dictationTools(editor) {
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Recognition) return { toolbar: null, center: null, dismiss() {} };
+  const label = 'Dictate (your browser sends your voice to its speech service)';
+  const button = (cls) => el('button', { type: 'button', class: cls, title: label, 'aria-label': label, 'aria-pressed': 'false' }, icon('mic'));
+  const toolbar = button('tool'), center = button('dictate-center');
+  center.hidden = !!editor.innerText.trim();
+  let rec = null;
+  const showListening = (on) => [toolbar, center].forEach((b) => {
+    b.classList.toggle('listening', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+  const insert = (text) => {
+    editor.focus();
+    const sel = window.getSelection();
+    if (!sel.rangeCount || !editor.contains(sel.anchorNode)) { sel.selectAllChildren(editor); sel.collapseToEnd(); }
+    const before = sel.getRangeAt(0).cloneRange();
+    before.selectNodeContents(editor);
+    before.setEnd(sel.anchorNode, sel.anchorOffset);
+    const after = sel.getRangeAt(0).cloneRange();
+    after.selectNodeContents(editor);
+    after.setStart(sel.focusNode, sel.focusOffset);
+    const gap = (side, test) => (side.toString() && !test.test(side.toString()) ? ' ' : '');
+    document.execCommand('insertText', false, gap(before, /\s$/) + text.trim() + gap(after, /^\s/));
+  };
+  const problems = {
+    'not-allowed': 'Dictation needs permission to use the microphone',
+    'service-not-allowed': 'This browser doesn\'t allow dictation here',
+    'audio-capture': 'No microphone found',
+    network: 'Dictation isn\'t available: this browser couldn\'t reach its speech service',
+  };
+  const toggle = () => {
+    if (rec) { rec.stop(); return; }
+    rec = new Recognition();
+    rec.continuous = true;
+    rec.interimResults = false;
+    rec.lang = navigator.language;
+    rec.onresult = (e) => {
+      if (!editor.isConnected) { rec?.abort(); return; }           // the reply was sent or closed
+      for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) insert(e.results[i][0].transcript);
+    };
+    rec.onerror = (e) => { if (problems[e.error]) toast(problems[e.error]); };
+    rec.onend = () => {
+      rec = null;
+      showListening(false);
+      if (editor.innerText.trim()) center.hidden = true;           // it would sit on the words
+    };
+    try {
+      rec.start();
+      showListening(true);
+    } catch (e) { rec = null; toast('Could not start dictation: ' + e.message); }
+  };
+  for (const b of [toolbar, center]) {
+    b.addEventListener('mousedown', (e) => e.preventDefault());    // keep the cursor in the editor
+    b.addEventListener('click', toggle);
+  }
+  editor.addEventListener('input', () => { if (!rec) center.hidden = true; });   // typed, not dictated
+  // A touch anywhere else: the big button goes and the microphone goes off with it, unless the touch is on
+  // the toolbar button, whose own click decides.
+  const dismiss = (target) => {
+    if (center.hidden || center.contains(target)) return;
+    center.hidden = true;
+    if (rec && !toolbar.contains(target)) rec.stop();
+  };
+  return { toolbar, center, dismiss };
+}
+
 function renderReplyBox(last, threadId, draft = null) {
   let replyAll = true;
   let draftId = draft?.id || null, dirty = false;
-  const rich = richEditor('Write your reply…', () => { dirty = true; });
+  const rich = richEditor('Click to type', () => { dirty = true; });
   const who = el('div', { class: 'reply-who' });
   const allBtn = el('button', { type: 'button' }, 'Reply all');
   const oneBtn = el('button', { type: 'button' }, 'Reply only');
@@ -2944,10 +3016,14 @@ function renderReplyBox(last, threadId, draft = null) {
     },
   };
   state.replyDraft = me;
-  return el('div', { class: 'reply' }, [
-    el('div', { class: 'reply-modes' }, [allBtn, oneBtn]), who, rich.editor, rich.chips, rich.emojiPop,
-    el('div', { class: 'reply-tools' }, [sendArchive, sendBtn, el('span', { class: 'sep' }), ...rich.formatTools]), rich.picker,
+  const dictation = dictationTools(rich.editor);
+  const box = el('div', { class: 'reply' }, [
+    el('div', { class: 'reply-modes' }, [allBtn, oneBtn]), who,
+    el('div', { class: 'reply-frame' }, [rich.editor, dictation.center]), rich.chips, rich.emojiPop,
+    el('div', { class: 'reply-tools' }, [sendArchive, sendBtn, el('span', { class: 'sep' }), ...rich.formatTools, dictation.toolbar]), rich.picker,
   ]);
+  box.addEventListener('pointerdown', (e) => dictation.dismiss(e.target));
+  return box;
 }
 
 // The opened-email panel can be widened: drag its left edge, or the wider/narrower button in its

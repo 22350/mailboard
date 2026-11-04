@@ -385,6 +385,13 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 .reply-tools { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; }
 .reply-tools .tool { width: 36px; min-height: 36px; padding: 0; font-size: 1rem; }
 .reply-tools .tool.b { font-weight: 700; } .reply-tools .tool.i { font-style: italic; } .reply-tools .tool.u { text-decoration: underline; }
+.reply-tools .tool svg { display: block; margin: auto; width: 20px; height: 20px; fill: currentColor; }
+.reply-tools .tool.listening, .dictate-center.listening, .dictate-center.listening:hover { background: #d93025; border-color: #d93025; color: #fff; }
+.reply-frame { position: relative; }
+.dictate-center { position: absolute; top: 50%; left: 80%; transform: translate(-50%, -50%); display: grid; place-items: center; width: 72px; min-height: 72px; padding: 0; border: 2px solid var(--muted); border-radius: 50%; background: transparent; color: var(--muted); }
+.dictate-center:hover { background: var(--col); color: var(--text); }
+.dictate-center svg { width: 40px; height: 40px; fill: currentColor; }
+.dictate-center[hidden] { display: none; }
 .reply-tools .sep { width: 1px; height: 24px; background: var(--border); margin: 0 .25rem; }
 .emoji-pop { display: grid; grid-template-columns: repeat(8, 36px); gap: .2rem; padding: .4rem; border: 1px solid var(--border); border-radius: 8px; width: max-content; }
 .emoji-pop[hidden] { display: none; }
