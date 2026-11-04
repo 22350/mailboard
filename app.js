@@ -2184,7 +2184,7 @@ function openColumnPicker() {
   ]);
 }
 
-function saveColumnList(list) {
+function saveColumnList(list, reloadAfter = 0) {
   settings.columns = list;
   settings.columnsSaved = true;
   settings.columnLabels = Object.fromEntries(Object.entries(settings.columnLabels).filter(([k]) => list.includes(k)));
@@ -2192,7 +2192,7 @@ function saveColumnList(list) {
   store.set('columns', list);
   assign(columns());
   render();
-  loadBoard();
+  setTimeout(loadBoard, reloadAfter);
 }
 
 async function removeColumn(i, afterDelete = false) {
@@ -2337,8 +2337,52 @@ function moveColumn(from, to, after) {
   let at = list.indexOf(settings.columns[to - 1]);
   if (after) at++;
   list.splice(at, 0, moved);
-  saveColumnList(list);
+  const nodeOf = (i) => $('#board').querySelector(`.column[data-col="${i}"]`);
+  const wasAt = new Map(columns().map((c, i) => [c.name, nodeOf(i)?.getBoundingClientRect().left]));
+  saveColumnList(list, 250);                             // a reload would redraw the columns mid-slide
+  // The columns slide to their new places, so it's clear what moved where.
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  columns().forEach((c, i) => {
+    const node = nodeOf(i), dx = wasAt.get(c.name) - node?.getBoundingClientRect().left;
+    if (dx) node.animate([{ transform: `translateX(${dx}px)` }, { transform: 'none' }], { duration: 200, easing: 'ease-out' });
+  });
 }
+
+// A see-through copy of a column follows the pointer while it's dragged. The browser's own drag image is
+// switched off, as it is for cards, so there's one clear thing moving.
+const columnGhost = {
+  node: null,
+  blank: null,
+  listening: false,
+  start(column, e) {
+    if (!this.listening) {
+      this.listening = true;
+      this.blank = el('div', { style: 'position:fixed;left:-10px;top:-10px;width:1px;height:1px' });
+      document.body.append(this.blank);
+      document.addEventListener('dragover', (ev) => this.move(ev), true);
+      document.addEventListener('drop', () => this.stop(), true);
+      document.addEventListener('dragend', () => this.stop(), true);
+    }
+    const r = column.getBoundingClientRect();
+    this.node = column.cloneNode(true);
+    this.node.id = 'col-ghost';
+    this.node.classList.remove('dragging-col');
+    this.node.setAttribute('aria-hidden', 'true');
+    this.node.style.width = `${r.width}px`;
+    this.node.querySelectorAll('[data-id],[data-col],[draggable]').forEach((n) => {
+      n.removeAttribute('data-id'); n.removeAttribute('data-col'); n.removeAttribute('draggable');
+    });
+    this.node.removeAttribute('data-col');
+    this.dx = e.clientX - r.left; this.dy = e.clientY - r.top;
+    document.body.append(this.node);
+    e.dataTransfer.setDragImage(this.blank, 0, 0);
+    this.move(e);
+  },
+  move(e) {
+    if (this.node) this.node.style.transform = `translate(${e.clientX - this.dx}px, ${e.clientY - this.dy}px) rotate(1.5deg)`;
+  },
+  stop() { this.node?.remove(); this.node = null; },
+};
 
 // One width for every column. Dragging the handle at a column's top-left or top-right corner sets
 // it for all of them; double-click a handle to go back to automatic widths. Remembered per browser.
@@ -2429,6 +2473,7 @@ function renderColumn(col, i) {
       state.dragging = true;
       e.dataTransfer.setData(COLUMN_DRAG, String(i));
       e.dataTransfer.effectAllowed = 'move';
+      columnGhost.start(node, e);
       node.classList.add('dragging-col');
     });
     head.addEventListener('dragend', () => { state.dragging = false; node.classList.remove('dragging-col'); });
