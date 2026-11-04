@@ -2392,7 +2392,12 @@ function toggleCollapsed(col, node) {
     ? [...settings.collapsedCols, col.name]
     : settings.collapsedCols.filter((name) => name !== col.name);
   store.set('collapsedCols', settings.collapsedCols);
+  const from = node.offsetWidth;
   node.classList.toggle('collapsed', on);
+  // A quick fold, so it's clear what happened to the column.
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const frame = (width) => ({ flex: `0 0 ${width}px`, width: `${width}px`, minWidth: '0', maxWidth: 'none', overflow: 'hidden' });
+  node.animate([frame(from), frame(node.offsetWidth)], { duration: 200, easing: 'ease-out' });
 }
 
 function renderColumn(col, i) {
