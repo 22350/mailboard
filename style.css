@@ -38,8 +38,8 @@ a { color: var(--accent); }
   background: var(--bar-bg); color: var(--bar-text);
 }
 .bar h1 { font-size: 1.15rem; margin: 0 .55rem 0 .35rem; padding: .3rem 0; line-height: 0; }
-/* The StediMail logo (white), its letters 30% taller than the old 1.15rem title's (Paul, 2026-11-03) */
-.bar h1 .logo { display: block; height: 1.8rem; width: auto; }
+/* The StediMail logo (white), 30% larger again (Paul, 2026-11-04) */
+.bar h1 .logo { display: block; height: 2.35rem; width: auto; }
 .bar .status { color: var(--bar-muted); }
 .bar button {
   background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.22); color: var(--bar-text);
@@ -113,6 +113,14 @@ a { color: var(--accent); }
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   box-shadow: 0 6px 20px rgba(0,0,0,.2);
 }
+.menu.downloads { width: min(420px, calc(100vw - 16px)); max-height: 60vh; overflow-y: auto; }
+.menu.downloads .row { display: flex; align-items: center; gap: .75rem; padding-right: .5rem; }
+.menu.downloads .menu-item { flex: 1; min-width: 0; display: flex; align-items: center; gap: .6rem; }
+.menu.downloads .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.menu.downloads time { flex: none; color: var(--muted); font-size: .8rem; }
+.menu.downloads .open-email { flex: none; width: 40px; min-height: 40px; padding: 0; display: grid; place-items: center; background: transparent; border-color: transparent; color: var(--muted); }
+.menu.downloads .open-email:hover { background: var(--col); color: var(--text); }
+.menu.downloads .open-email svg { width: 22px; height: 22px; fill: currentColor; }
 .menu hr { border: 0; border-top: 1px solid var(--border); margin: .35rem 0; }
 .menu-head { padding: .35rem 1rem; font-size: .85rem; color: var(--muted); }
 .menu-item {
@@ -490,7 +498,7 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 @media (max-width: 640px) {
   .bar { flex-wrap: wrap; row-gap: .5rem; padding: .5rem .75rem; }
   .bar h1 { display: block; font-size: 1.05rem; }
-  .bar h1 .logo { height: 1.6rem; }
+  .bar h1 .logo { height: 2.1rem; }
   .bar .status, .bar .spacer { display: none; }
   .bar h1 { margin-right: auto; }
   .bar .search-box { order: 10; flex: 1 0 100%; }

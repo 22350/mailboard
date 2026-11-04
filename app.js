@@ -2139,7 +2139,7 @@ function show(view) {
   $('#main-row').hidden = view !== 'board';
   $('#signin').hidden = view !== 'signin';
   $('#setup').hidden = view !== 'setup';
-  for (const id of ['btn-undo', 'btn-compose', 'btn-refresh', 'search-form', 'btn-menu', 'col-picker', 'btn-report']) $('#' + id).hidden = view !== 'board';
+  for (const id of ['btn-undo', 'btn-downloads', 'btn-compose', 'btn-refresh', 'search-form', 'btn-menu', 'col-picker', 'btn-report']) $('#' + id).hidden = view !== 'board';
   $('#sidebar').hidden = !state.sidebarOpen;
   if (view === 'board') renderSidebar();
 }
@@ -2754,7 +2754,7 @@ function bodyFrame(m) {
   return frame;
 }
 
-async function downloadAttachment(msgId, part) {
+async function downloadAttachment(msgId, part, threadId) {
   try {
     const r = await api(`/messages/${msgId}/attachments/${part.body.attachmentId}`);
     const url = URL.createObjectURL(new Blob([b64urlBytes(r.data)], { type: part.mimeType }));
@@ -2763,9 +2763,53 @@ async function downloadAttachment(msgId, part) {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
+    rememberDownload(msgId, threadId, part.filename);
   } catch (e) {
     if (!(e instanceof AuthError)) toast('Download failed: ' + e.message);
   }
+}
+
+// The Downloads button lists attachments saved through StediMail, kept in this browser. It can't see the
+// computer's Downloads folder: a web page isn't allowed to, so a listed file may since have been moved.
+const DOWNLOADS_KEPT = 50;
+function rememberDownload(msgId, threadId, filename) {
+  const others = store.get('downloads', []).filter((d) => d.msgId !== msgId || d.filename !== filename);
+  store.set('downloads', [{ msgId, threadId, filename, at: Date.now() }, ...others].slice(0, DOWNLOADS_KEPT));
+}
+
+// Gmail's attachment ids don't last, so find the file in its message again by name.
+async function downloadAgain(d) {
+  try {
+    const m = await api(`/messages/${d.msgId}?format=full`);
+    const part = attachmentsOf(m.payload).find((p) => p.filename === d.filename);
+    if (part) await downloadAttachment(d.msgId, part, d.threadId);
+    else toast(`“${d.filename}” is no longer in that email`);
+  } catch (e) {
+    if (!(e instanceof AuthError)) toast('Could not download it: that email may have been deleted');
+  }
+}
+
+function openDownloads(anchor) {
+  if ($('#menu.downloads')) { closeMenu(); return; }
+  closeMenu();
+  closeColorPicker();
+  const list = store.get('downloads', []);
+  const menu = el('div', { class: 'menu downloads', id: 'menu', role: 'menu' }, [
+    el('div', { class: 'menu-head' }, list.length ? 'Downloaded from StediMail' : 'Attachments you download from StediMail will be listed here'),
+  ]);
+  for (const d of list) {
+    const again = el('button', { type: 'button', class: 'menu-item', role: 'menuitem', title: `Download ${d.filename} again` }, [
+      el('span', { class: 'name' }, d.filename), el('time', {}, dateLabel(d.at)),
+    ]);
+    again.addEventListener('click', () => downloadAgain(d));
+    const open = el('button', { type: 'button', class: 'open-email', title: 'Open its email', 'aria-label': `Open the email with ${d.filename}` }, icon('mail'));
+    open.addEventListener('click', () => openThread(d.threadId));
+    menu.append(el('div', { class: 'row' }, [again, open]));
+  }
+  document.body.append(menu);
+  placePopup(menu, anchor);
+  menu.querySelector('button')?.focus();
+  setTimeout(() => document.addEventListener('click', closeMenu, { once: true }));
 }
 
 async function copyAddress(addr) {
@@ -2834,7 +2878,7 @@ function renderMessage(m, expanded) {
     if (files.length) {
       details.append(el('div', { class: 'files' }, files.map((p) => {
         const b = el('button', {}, '📎 ' + p.filename);
-        b.addEventListener('click', () => downloadAttachment(m.id, p));
+        b.addEventListener('click', () => downloadAttachment(m.id, p, m.threadId));
         return b;
       })));
     }
@@ -3980,6 +4024,7 @@ function wireUi() {
   });
   document.addEventListener('keydown', onKey);
   $('#btn-undo').addEventListener('click', undoLast);
+  $('#btn-downloads').addEventListener('click', (e) => { e.stopPropagation(); openDownloads(e.currentTarget); });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && Date.now() - state.lastLoad > 60000) loadBoard();
     else watchMailbox();
