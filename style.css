@@ -268,7 +268,7 @@ a { color: var(--accent); }
 @media (hover: hover) {
   .card-label { position: absolute; top: .15rem; left: .5rem; width: calc(100% - .7rem); }
   .card-label:placeholder-shown { display: none; }
-  .card:hover .card-label { display: block; }
+  .card:hover .card-label, .card .card-label:focus { display: block; }   /* stays open while typing, wherever the mouse goes */
 }
 @media (hover: none) {
   .card-actions { position: static; display: flex; justify-content: flex-end; margin-top: .3rem; }
