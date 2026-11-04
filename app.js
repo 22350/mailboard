@@ -1561,9 +1561,11 @@ async function loadBoard() {
       if (!listed.has(id)) listed.set(id, { id, historyId: '' });    // '' = always re-check (few of these; catches archiving elsewhere)
     }
     const seen = await fetchSummaries([...listed.values()]);
-    for (const id of Object.keys(state.bumps)) {         // no longer in the Inbox or a column: forget it
+    // Only the Inbox sorts by when an email came back. Moving a thread to a column adds INBOX to any of its
+    // messages that lacked it (Paul's own replies, say), which Gmail's history reports just like a real return.
+    for (const id of Object.keys(state.bumps)) {
       const t = state.threads.get(id);
-      if (!t || columnOf(t, cols) < 0) delete state.bumps[id];
+      if (!t || columnOf(t, cols) !== 0) delete state.bumps[id];
     }
     store.set('bumps', state.bumps);
     for (const id of state.search?.ids || []) seen.add(id);
@@ -2468,7 +2470,8 @@ function renderCard(t, colIdx) {
       el('span', { class: 'people' }, t.people),
       t.count > 1 ? el('span', { class: 'num' }, String(t.count)) : null,
       where,
-      el('time', {}, dateLabel(t.date)),
+      // The date a card sorts by, so the column reads in order; a returned email says when it was sent on hover.
+      el('time', sortTime(t) > t.date ? { title: `Sent ${dateLabel(t.date, true)}` } : {}, dateLabel(sortTime(t))),
     ]),
     el('div', { class: 'body' }, [
       t.replied ? icon('replied', 'replied') : null,
