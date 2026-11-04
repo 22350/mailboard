@@ -162,6 +162,16 @@ a { color: var(--accent); }
 }
 .card.open { border-color: var(--accent); }
 .card.dragging { opacity: .4; }
+.card.nested { margin-left: 1.5rem; border-left: 3px solid var(--accent); }
+.card.nest-target { outline: 3px solid var(--accent); outline-offset: 1px; background: var(--drop); }
+.card.nest-target::after {
+  content: 'Drop to nest under this'; position: absolute; right: .5rem; bottom: .35rem; z-index: 2; padding: .1rem .5rem;
+  font-size: .8rem; color: var(--accent-text); background: var(--accent); border-radius: 6px; pointer-events: none;
+}
+.card .nest-toggle {
+  width: auto; min-width: 44px; min-height: 32px; padding: 0 .5rem; flex: none; font-size: 1rem; white-space: nowrap;
+  color: var(--accent); border: 1px solid var(--border); border-radius: 7px; background: transparent;
+}
 #drag-ghost { position: fixed; left: 0; top: 0; z-index: 9999; padding: 14px 0 0 14px; pointer-events: none; }
 #drag-ghost[hidden] { display: none; }
 #drag-ghost svg { display: block; width: 44px; height: 44px; fill: var(--accent); opacity: .55; }

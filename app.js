@@ -103,6 +103,11 @@ const state = {
   me: store.get('email', ''),
   labelIds: {},        // column name -> Gmail label id
   colorIds: {},        // color name -> Gmail label id (created on first use)
+  nestLabels: new Map(), // parent thread id -> id of its hidden nesting label
+  nestParents: new Map(), // hidden nesting label id -> parent thread id
+  nestFlagId: null,    // hidden label on every thread in a nest, so they're loaded even when old
+  nestOf: new Map(),   // nested thread id -> parent, as shown on the board now
+  nestKids: new Map(), // parent thread id -> nested thread ids, as shown on the board now
   threads: new Map(),  // thread id -> summary
   board: [],           // per column: sorted thread ids
   more: [],            // per column: Gmail has more than we fetched
@@ -326,6 +331,13 @@ async function ensureLabels(cols) {
     .map((l) => ({ id: l.id, name: l.name, due: snoozeDue(l.name) })).filter((l) => l.due);
   state.snoozeIds = new Set(state.snoozeLabels.map((l) => l.id));
   state.snoozeFlagId = labels.find((l) => l.name === SNOOZE_FLAG)?.id || null;
+  state.nestLabels = new Map(); state.nestParents = new Map();
+  for (const l of labels) {
+    if (!l.name.startsWith(NEST_PREFIX)) continue;
+    state.nestLabels.set(l.name.slice(NEST_PREFIX.length), l.id);
+    state.nestParents.set(l.id, l.name.slice(NEST_PREFIX.length));
+  }
+  state.nestFlagId = labels.find((l) => l.name === NEST_FLAG)?.id || null;
   state.allUserLabels = ownLabelChoices(labels);
   // StediMail's spare column labels (Board/<name> that isn't a column now), for the + suggestions.
   const inUse = new Set(cols.filter((c) => !c.inbox).map((c) => labelNameOf(c.name)));
@@ -536,6 +548,141 @@ function openSortMenu(anchor, col) {
   ]);
 }
 
+// ---------- nesting: an email under another email, one level deep ----------
+// Gmail has no such idea, so a nested thread carries a hidden label naming its parent thread, the way
+// snoozed threads carry one naming their wake time. Labels survive reloads and work on other computers.
+// A nest only shows when both emails are in the same column; otherwise the email just stands alone, and
+// comes back under its parent if they meet again (e.g. Undo after deleting the parent).
+const NEST_PREFIX = 'Mailboard/Nest/';
+const NEST_FLAG = 'Mailboard/Nested';
+const NEST_COLLAPSED = store.get('nestCollapsed', {});
+const hiddenLabel = (name) => api('/labels', { method: 'POST', body: { name, labelListVisibility: 'labelHide', messageListVisibility: 'hide' } });
+const nestLabelIdsOn = (t) => [...t.labels].filter((l) => state.nestParents.has(l));
+const savedParentOf = (t) => { const l = nestLabelIdsOn(t)[0]; return l ? state.nestParents.get(l) : null; };
+
+function arrangeNests(cols) {
+  state.nestOf = new Map(); state.nestKids = new Map();
+  state.board.forEach((list) => {
+    const here = new Set(list);
+    const parentOf = new Map();
+    for (const id of list) {
+      const p = savedParentOf(state.threads.get(id));
+      if (p && p !== id && here.has(p) && !savedParentOf(state.threads.get(p))) parentOf.set(id, p);
+    }
+    const kids = new Map();
+    for (const id of list) if (parentOf.has(id)) {
+      if (!kids.has(parentOf.get(id))) kids.set(parentOf.get(id), []);
+      kids.get(parentOf.get(id)).push(id);
+    }
+    // A nest sits where its best-placed email sorts, so new mail in a nested email brings the nest up.
+    const placed = new Set(), out = [];
+    for (const id of list) {
+      const root = parentOf.get(id) || id;
+      if (placed.has(root)) continue;
+      placed.add(root);
+      out.push(root, ...(kids.get(root) || []));
+    }
+    list.splice(0, list.length, ...out);
+    parentOf.forEach((p, id) => state.nestOf.set(id, p));
+    kids.forEach((k, p) => state.nestKids.set(p, k));
+  });
+}
+
+// Puts thread id under parentId, or takes it out with parentId = null.
+async function setNest(id, parentId) {
+  const t = state.threads.get(id);
+  if (!t) return;
+  const oldParent = savedParentOf(t);
+  const add = [], remove = nestLabelIdsOn(t);
+  if (parentId) {
+    let lab = state.nestLabels.get(parentId);
+    if (!lab) {
+      lab = (await hiddenLabel(NEST_PREFIX + parentId)).id;
+      state.nestLabels.set(parentId, lab); state.nestParents.set(lab, parentId);
+    }
+    if (!state.nestFlagId) state.nestFlagId = (await hiddenLabel(NEST_FLAG)).id;
+    add.push(lab, state.nestFlagId);
+    remove.splice(0, remove.length, ...remove.filter((l) => l !== lab));
+  } else if (state.nestFlagId && t.labels.has(state.nestFlagId)
+    && ![...state.threads.values()].some((x) => savedParentOf(x) === id)) {
+    remove.push(state.nestFlagId);
+  }
+  add.forEach((l) => t.labels.add(l));
+  remove.forEach((l) => t.labels.delete(l));
+  const calls = [api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: add, removeLabelIds: remove } })];
+  const parent = parentId && state.threads.get(parentId);
+  if (parent && !parent.labels.has(state.nestFlagId)) {
+    parent.labels.add(state.nestFlagId);
+    calls.push(api(`/threads/${parentId}/modify`, { method: 'POST', body: { addLabelIds: [state.nestFlagId], removeLabelIds: [] } }));
+  }
+  // Nobody left under the old parent: its label and flag have no more use.
+  if (oldParent && oldParent !== parentId && ![...state.threads.values()].some((x) => savedParentOf(x) === oldParent)) {
+    const lab = state.nestLabels.get(oldParent);
+    state.nestLabels.delete(oldParent); state.nestParents.delete(lab);
+    const was = state.threads.get(oldParent);
+    if (was && state.nestFlagId && was.labels.delete(state.nestFlagId) && !savedParentOf(was)) {
+      calls.push(api(`/threads/${oldParent}/modify`, { method: 'POST', body: { addLabelIds: [], removeLabelIds: [state.nestFlagId] } }));
+    }
+    calls.push(api(`/labels/${lab}`, { method: 'DELETE' }));
+  }
+  assign(columns());
+  render();
+  await Promise.all(calls);
+}
+
+async function nestWithUndo(id, parentId) {
+  const cols = columns();
+  const t = state.threads.get(id), parent = state.threads.get(parentId);
+  if (!t || !parent) return;
+  const prevCol = columnOf(t, cols), parentCol = columnOf(parent, cols), prevParent = state.nestOf.get(id) || null;
+  try {
+    if (prevCol !== parentCol && !await moveThread(id, parentCol)) return;
+    await setNest(id, parentId);
+    toast(`Nested under “${parent.subject}”`, { label: 'Undo', run: async () => {
+      try {
+        await setNest(id, prevParent);
+        if (prevCol !== parentCol && prevCol >= 0) await moveThread(id, prevCol);
+      } catch (e) { if (!(e instanceof AuthError)) toast('Undo failed: ' + e.message); }
+    } });
+  } catch (e) {
+    if (!(e instanceof AuthError)) toast('Could not nest: ' + e.message);
+    await loadBoard();
+  }
+}
+
+async function unnestWithUndo(id) {
+  const parent = state.nestOf.get(id);
+  try {
+    await setNest(id, null);
+    toast('Took it out of the nest', { label: 'Undo', run: () => setNest(id, parent).catch((e) => toast(e.message)) });
+  } catch (e) { if (!(e instanceof AuthError)) toast('Could not take it out: ' + e.message); }
+}
+
+function toggleNest(id) {
+  if (NEST_COLLAPSED[id]) delete NEST_COLLAPSED[id]; else NEST_COLLAPSED[id] = 1;
+  store.set('nestCollapsed', NEST_COLLAPSED);
+  render();
+}
+
+// Dropping on the middle of a card nests. A card dragged in from another column has to rest there a
+// moment first, because a quick drop anywhere in a column has always meant "move it to this column".
+const NEST_HOLD_MS = 500;
+const nestHover = { id: null, since: 0 };
+function clearNestTarget() {
+  nestHover.id = null;
+  document.querySelectorAll('.card.nest-target').forEach((c) => c.classList.remove('nest-target'));
+}
+function nestTargetFor(card, t, colIdx, e) {
+  const dragged = state.dragId;
+  const parentId = state.nestOf.get(t.id) || t.id;         // onto a nested email = into the same nest
+  if (!dragged || dragged === parentId || colIdx < 0 || state.nestKids.has(dragged)) return null;
+  if (state.nestOf.get(dragged) === parentId) return null;
+  if (state.selected.has(dragged) && state.selected.size > 1) return null;
+  const r = card.getBoundingClientRect();
+  const where = (e.clientY - r.top) / r.height;
+  return where > .2 && where < .8 ? parentId : null;
+}
+
 function assign(cols) {
   state.board = cols.map(() => []);
   for (const t of state.threads.values()) {
@@ -546,6 +693,7 @@ function assign(cols) {
     const { cmp } = sortOf(cols[i]);
     list.sort((a, b) => cmp(state.threads.get(a), state.threads.get(b)));
   });
+  arrangeNests(cols);
 }
 
 const metadataPath = (id) =>
@@ -775,6 +923,9 @@ async function runBulk(action, arg) {
       undo = () => batchModify(ids, change.remove, change.add);
     } else {
       const ids = [...state.selected];
+      if (action === 'move' || action === 'archive') {   // a nest moves together
+        for (const id of [...ids]) for (const k of state.nestKids.get(id) || []) if (!ids.includes(k)) ids.push(k);
+      }
       const modify = (add, remove) => mapLimit(ids, 5, (id) =>
         api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: add, removeLabelIds: remove } }));
       setStatus('Updating…');
@@ -1402,6 +1553,10 @@ async function loadBoard() {
     state.more = lists.map((r) => !!r.nextPageToken);
     const listed = new Map();
     for (const t of lists.flatMap((r) => r.threads || [])) listed.set(t.id, t);
+    if (state.nestFlagId) {                              // nests stay together, however old their emails are
+      const nested = await api('/threads?' + new URLSearchParams({ maxResults: '500', labelIds: state.nestFlagId }));
+      for (const t of nested.threads || []) if (!listed.has(t.id)) listed.set(t.id, t);
+    }
     for (const id of Object.keys(state.bumps)) {         // returned emails, even if older than the newest 100
       if (!listed.has(id)) listed.set(id, { id, historyId: '' });    // '' = always re-check (few of these; catches archiving elsewhere)
     }
@@ -1460,11 +1615,13 @@ async function moveThread(id, colIdx) {
   const before = new Set(t.labels);
   add.forEach((l) => t.labels.add(l));
   remove.forEach((l) => t.labels.delete(l));
+  const kids = state.nestKids.get(id) || [];             // a nest moves together
   assign(cols);
   render();
   refreshReaderActions(id);
   try {
     await api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: add, removeLabelIds: remove } });
+    await Promise.all(kids.map((k) => moveThread(k, colIdx)));
     return true;
   } catch (e) {
     t.labels = before;
@@ -1481,9 +1638,17 @@ async function moveWithUndo(id, colIdx) {
   const t = state.threads.get(id);
   if (!t) return;
   const prev = columnOf(t, cols);
-  if (prev === colIdx) return;
+  const parent = state.nestOf.get(id) || null;
+  if (prev === colIdx) {                                 // dragged off its parent, within the column
+    if (parent) await unnestWithUndo(id);
+    return;
+  }
+  if (parent) await setNest(id, null);                   // dragged to another column: out of the nest
   if (await moveThread(id, colIdx)) {
-    toast(`Moved to ${cols[colIdx].name}`, prev < 0 ? null : { label: 'Undo', run: () => moveThread(id, prev) });
+    toast(`Moved to ${cols[colIdx].name}`, prev < 0 ? null : { label: 'Undo', run: async () => {
+      await moveThread(id, prev);
+      if (parent) await setNest(id, parent);
+    } });
   }
 }
 
@@ -1494,19 +1659,23 @@ async function archiveThread(id) {
   const t = state.threads.get(id);
   if (!t) return;
   // StediMail's own column labels come off; the person's own labels stay (Gmail's Archive keeps labels too).
-  const remove = ['INBOX', ...cols.slice(1).filter((c) => !isOwnLabel(c.name)).map((c) => state.labelIds[c.name])]
-    .filter((l) => t.labels.has(l));
+  const all = ['INBOX', ...cols.slice(1).filter((c) => !isOwnLabel(c.name)).map((c) => state.labelIds[c.name])];
   const keptIn = cols.slice(1).find((c) => isOwnLabel(c.name) && t.labels.has(state.labelIds[c.name]));
-  const apply = async (add, rem) => {
-    add.forEach((l) => t.labels.add(l));
-    rem.forEach((l) => t.labels.delete(l));
+  const kids = state.nestKids.get(id) || [];             // a nest is archived together
+  const plan = [id, ...kids].map((x) => ({ x, th: state.threads.get(x), remove: all.filter((l) => state.threads.get(x).labels.has(l)) }));
+  const apply = async (undoing) => {
+    for (const { th, remove } of plan) {
+      if (undoing) remove.forEach((l) => th.labels.add(l)); else remove.forEach((l) => th.labels.delete(l));
+    }
     assign(cols);
     render();
-    await api(`/threads/${id}/modify`, { method: 'POST', body: { addLabelIds: add, removeLabelIds: rem } });
+    await Promise.all(plan.map(({ x, remove }) => api(`/threads/${x}/modify`, { method: 'POST',
+      body: undoing ? { addLabelIds: remove, removeLabelIds: [] } : { addLabelIds: [], removeLabelIds: remove } })));
   };
   try {
-    await apply([], remove);
-    toast(keptIn ? `Archived. It keeps your “${keptIn.name}” label, so it stays in that column.` : 'Archived', { label: 'Undo', run: () => apply(remove, []).catch((e) => toast(e.message)) });
+    await apply(false);
+    const said = kids.length ? `Archived, with ${kids.length} nested` : 'Archived';
+    toast(keptIn ? `Archived. It keeps your “${keptIn.name}” label, so it stays in that column.` : said, { label: 'Undo', run: () => apply(true).catch((e) => toast(e.message)) });
   } catch (e) {
     if (!(e instanceof AuthError)) toast('Could not archive: ' + e.message);
   }
@@ -2285,7 +2454,8 @@ function renderCard(t, colIdx) {
   }
   const card = el('article', {
     class: 'card' + (t.unread ? ' unread' : '') + (t.id === state.openId ? ' open' : '') + (color ? ' colored' : '')
-      + (state.selected.has(t.id) ? ' selected' : ''),
+      + (state.selected.has(t.id) ? ' selected' : '') + (colIdx >= 0 && state.nestOf.has(t.id) ? ' nested' : ''),
+    hidden: colIdx >= 0 && NEST_COLLAPSED[state.nestOf.get(t.id)] ? '' : null,
     style: color ? `--card-color:${color.bg}` : null,
     tabindex: '0', draggable: 'true', 'data-id': t.id, 'data-col': colIdx,
     // A button to accessibility, with a name: so Stediclick's sticky buttons and magnet see each card
@@ -2294,6 +2464,7 @@ function renderCard(t, colIdx) {
   }, [
     el('div', { class: 'top' }, [
       checkbox('Select', state.selected.has(t.id), () => toggleSelect(t.id)),
+      colIdx >= 0 && state.nestKids.has(t.id) ? nestToggle(t.id) : null,
       el('span', { class: 'people' }, t.people),
       t.count > 1 ? el('span', { class: 'num' }, String(t.count)) : null,
       where,
@@ -2317,16 +2488,51 @@ function renderCard(t, colIdx) {
         : iconButton('Mark as unread', 'unread', () => toggleRead(t.id)),
     ]),
   ]);
+  card.addEventListener('dragover', (e) => {
+    const target = nestTargetFor(card, t, colIdx, e);
+    if (!target) { if (nestHover.id) clearNestTarget(); return; }
+    if (nestHover.id !== target) {
+      clearNestTarget();
+      nestHover.id = target; nestHover.since = performance.now();
+    }
+    const sameColumn = columnOf(state.threads.get(state.dragId), columns()) === colIdx;
+    if (!sameColumn && performance.now() - nestHover.since < NEST_HOLD_MS) return;   // still just passing over
+    e.preventDefault(); e.stopPropagation();
+    card.closest('.column')?.classList.remove('drop');
+    document.querySelector(`.card[data-id="${target}"]`)?.classList.add('nest-target');
+  });
+  card.addEventListener('drop', (e) => {
+    const target = document.querySelector('.card.nest-target')?.dataset.id;
+    const id = state.dragId;
+    clearNestTarget();
+    if (!target || !id) return;                          // an ordinary drop: the column handles it
+    e.preventDefault(); e.stopPropagation();
+    state.dragging = false;
+    card.closest('.column')?.classList.remove('drop');
+    nestWithUndo(id, target);
+  });
   card.addEventListener('dragstart', (e) => {
     state.dragging = true;
+    state.dragId = t.id;
     e.dataTransfer.setData('text/plain', t.id);
     e.dataTransfer.effectAllowed = 'move';
     dragGhost.start(e);
     card.classList.add('dragging');
   });
-  card.addEventListener('dragend', () => { state.dragging = false; card.classList.remove('dragging'); });
+  card.addEventListener('dragend', () => { state.dragging = false; state.dragId = null; clearNestTarget(); card.classList.remove('dragging'); });
   card.addEventListener('click', () => openThread(t.id));
   return card;
+}
+
+// The arrow on a parent card: shows or hides the emails under it, and says how many (and how many unread).
+function nestToggle(id) {
+  const kids = state.nestKids.get(id);
+  const closed = !!NEST_COLLAPSED[id];
+  const unread = kids.filter((k) => state.threads.get(k).unread).length;
+  const label = `${closed ? 'Show' : 'Hide'} ${kids.length} nested email${kids.length === 1 ? '' : 's'}`;
+  const b = iconButton(label, null, () => toggleNest(id), `${closed ? '▸' : '▾'} ${kids.length}${closed && unread ? ` (${unread} unread)` : ''}`);
+  b.classList.add('nest-toggle');
+  return b;
 }
 
 // ---------- reader ----------
@@ -3404,7 +3610,10 @@ function onKey(e) {
     openColorPicker(card, id);
   } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();
-    (e.key === 'ArrowDown' ? card.nextElementSibling : card.previousElementSibling)?.focus();
+    const step = e.key === 'ArrowDown' ? 'nextElementSibling' : 'previousElementSibling';
+    let next = card[step];
+    while (next?.hidden) next = next[step];              // past the emails inside a closed nest
+    next?.focus();
   } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
     e.preventDefault();
     const target = document.querySelector(`.column[data-col="${col + (e.key === 'ArrowRight' ? 1 : -1)}"] .cards`);
