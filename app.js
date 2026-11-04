@@ -2319,10 +2319,18 @@ function decodePart(part) {
 }
 
 const FRAME_HEAD = '<!doctype html><meta charset="utf-8"><base target="_blank"><style>' +
-  'html,body{margin:0;background:#fff;color:#111;font:15px/1.5 system-ui,sans-serif;overflow-wrap:anywhere}' +
+  'html,body{margin:0;color-scheme:light;background:#fff;color:#111;font:15px/1.5 system-ui,sans-serif;overflow-wrap:anywhere}' +
   'img{max-width:100%;height:auto}table{max-width:100%}' +
   '#mb-copy{position:absolute;z-index:9;font:12px system-ui,sans-serif;padding:2px 8px;border:1px solid #bbb;' +
   'border-radius:6px;background:#fde2e2;border-color:#f3a5a5;color:#8a1c1c;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.2)}</style>';
+
+// Emails are always shown on white, so an email's dark-mode styling (often white text) must never apply,
+// even when the computer is set to dark: its dark rules are switched off and its light rules always on.
+function lightOnly(html) {
+  const force = (css) => css.replace(/\(\s*prefers-color-scheme\s*:\s*(dark|light)\s*\)/gi,
+    (_, scheme) => (scheme.toLowerCase() === 'light' ? '(min-width:0)' : '(prefers-color-scheme:none)'));
+  return html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, force).replace(/\bmedia\s*=\s*("[^"]*"|'[^']*')/gi, force);
+}
 
 // Pictures inside an email (logos, icons) are attached parts the HTML points at as "cid:<Content-ID>".
 function partHeader(p, name) {
@@ -2356,7 +2364,7 @@ function referencedCids(m) {
 function bodyFrame(m) {
   const html = findPart(m.payload, 'text/html');
   const text = html ? null : findPart(m.payload, 'text/plain');
-  const content = html ? decodePart(html)
+  const content = html ? lightOnly(decodePart(html))
     : text ? `<div style="white-space:pre-wrap">${escapeHtml(decodePart(text))}</div>`
     : '<p><i>(no text content)</i></p>';
   // No allow-scripts: email content can never run code. allow-same-origin
