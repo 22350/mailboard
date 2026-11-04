@@ -9,9 +9,9 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="stylesheet" href="style.css?v=20261104135006">
+<link rel="stylesheet" href="style.css?v=20261104140615">
 <script src="https://accounts.google.com/gsi/client" async></script>
-<script src="app.js?v=20261104135006" defer></script>
+<script src="app.js?v=20261104140615" defer></script>
 </head>
 <body>
 <header class="bar">
@@ -19,6 +19,7 @@
   <h1><img class="logo" src="stedimail-logo.svg" alt="StediMail" width="1016" height="230"></h1>
   <button id="btn-refresh" type="button" hidden title="Refresh" aria-label="Refresh"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg></button>
   <button id="btn-compose" hidden>Compose</button>
+  <button id="btn-downloads" type="button" hidden title="Downloads" aria-label="Downloads"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7 10.5l5 5 5-5"/><path d="M5 20h14"/></svg></button>
   <form id="search-form" class="search-box" role="search" hidden>
     <input id="search" type="search" placeholder="Search mail" autocomplete="off">
   </form>
@@ -29,7 +30,6 @@
   <button id="btn-install" class="install-btn" type="button" hidden title="Open StediMail in its own window, without the browser's bars">Install StediMail</button>
   <div class="spacer"></div>
   <button id="btn-undo" type="button" hidden disabled title="Undo (Ctrl+Z)">Undo</button>
-  <button id="btn-downloads" type="button" hidden title="Attachments you've downloaded from StediMail">Downloads</button>
   <button id="btn-settings">Settings</button>
 </header>
 

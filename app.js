@@ -2778,14 +2778,50 @@ function rememberDownload(msgId, threadId, filename) {
 }
 
 // Gmail's attachment ids don't last, so find the file in its message again by name.
+async function downloadedPart(d) {
+  const m = await api(`/messages/${d.msgId}?format=full`);
+  return attachmentsOf(m.payload).find((p) => p.filename === d.filename);
+}
+
 async function downloadAgain(d) {
   try {
-    const m = await api(`/messages/${d.msgId}?format=full`);
-    const part = attachmentsOf(m.payload).find((p) => p.filename === d.filename);
+    const part = await downloadedPart(d);
     if (part) await downloadAttachment(d.msgId, part, d.threadId);
     else toast(`“${d.filename}” is no longer in that email`);
   } catch (e) {
     if (!(e instanceof AuthError)) toast('Could not download it: that email may have been deleted');
+  }
+}
+
+// What the browser can show in a tab, going by the file's extension. A page can't open the copy on the
+// computer, so this shows Gmail's copy. Only these types, never HTML or SVG: a file opened this way runs
+// as part of StediMail, and anything in it that could run code could reach the Gmail sign-in.
+const VIEWABLE = {
+  pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+  txt: 'text/plain;charset=utf-8', csv: 'text/plain;charset=utf-8', log: 'text/plain;charset=utf-8',
+  mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', mp4: 'video/mp4', webm: 'video/webm',
+};
+
+async function openDownload(d) {
+  const type = VIEWABLE[d.filename.split('.').pop().toLowerCase()];
+  if (!type) {
+    toast(`A browser can't open “${d.filename}”, so it's downloading instead`);
+    await downloadAgain(d);
+    return;
+  }
+  const tab = window.open('', '_blank');         // now, while it still counts as the click: pop-up blockers
+  try {
+    const part = await downloadedPart(d);
+    if (!part) { tab?.close(); toast(`“${d.filename}” is no longer in that email`); return; }
+    if (!tab) { toast('Allow pop-ups for StediMail to open files'); return; }
+    const r = await api(`/messages/${d.msgId}/attachments/${part.body.attachmentId}`);
+    const url = URL.createObjectURL(new Blob([b64urlBytes(r.data)], { type }));
+    tab.opener = null;
+    tab.location = url;
+    setTimeout(() => URL.revokeObjectURL(url), 300000);
+  } catch (e) {
+    tab?.close();
+    if (!(e instanceof AuthError)) toast('Could not open it: that email may have been deleted');
   }
 }
 
@@ -2798,13 +2834,13 @@ function openDownloads(anchor) {
     el('div', { class: 'menu-head' }, list.length ? 'Downloaded from StediMail' : 'Attachments you download from StediMail will be listed here'),
   ]);
   for (const d of list) {
-    const again = el('button', { type: 'button', class: 'menu-item', role: 'menuitem', title: `Download ${d.filename} again` }, [
+    const name = el('button', { type: 'button', class: 'menu-item', role: 'menuitem', title: `Open ${d.filename}` }, [
       el('span', { class: 'name' }, d.filename), el('time', {}, dateLabel(d.at)),
     ]);
-    again.addEventListener('click', () => downloadAgain(d));
+    name.addEventListener('click', () => openDownload(d));
     const open = el('button', { type: 'button', class: 'open-email', title: 'Open its email', 'aria-label': `Open the email with ${d.filename}` }, icon('mail'));
     open.addEventListener('click', () => openThread(d.threadId));
-    menu.append(el('div', { class: 'row' }, [again, open]));
+    menu.append(el('div', { class: 'row' }, [name, open]));
   }
   document.body.append(menu);
   placePopup(menu, anchor);
@@ -3357,10 +3393,14 @@ function setupInstallButton() {
 }
 
 function readerHead(title) {
-  const close = el('button', { 'aria-label': 'Close' }, '✕');
+  const x = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  x.setAttribute('viewBox', '0 0 24 24');
+  x.setAttribute('aria-hidden', 'true');
+  x.innerHTML = '<path d="M5 5l14 14M19 5L5 19"/>';
+  const close = el('button', { type: 'button', class: 'reader-close', title: 'Close (Esc)', 'aria-label': 'Close' },
+    [x, el('kbd', { class: 'esc-hint' }, 'ESC')]);
   close.addEventListener('click', closeReader);
-  const esc = el('kbd', { class: 'esc-hint', title: 'Press Esc to close' }, 'ESC');
-  return el('div', { class: 'reader-head' }, [el('h2', {}, title), widenButton(), esc, close]);
+  return el('div', { class: 'reader-head' }, [el('h2', {}, title), widenButton(), close]);
 }
 
 // A draft opens at the reply box, which is the last thing in the reader. The emails above it are still

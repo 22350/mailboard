@@ -53,9 +53,9 @@ a { color: var(--accent); }
 .status { color: var(--muted); font-size: .9rem; }
 .search-box { flex: 0 1 360px; min-width: 0; }
 /* Refresh: a square arrow just left of the search box (Paul, 2026-11-03) */
-.bar #btn-refresh { width: 38px; height: 38px; min-height: 0; padding: 0; display: inline-grid; place-items: center;
+.bar #btn-refresh, .bar #btn-downloads { width: 38px; height: 38px; min-height: 0; padding: 0; display: inline-grid; place-items: center;
   font-size: 1.35rem; line-height: 1; border-radius: 8px; flex: 0 0 auto; }
-.bar #btn-refresh[hidden] { display: none; }
+.bar #btn-refresh[hidden], .bar #btn-downloads[hidden] { display: none; }
 .search-box input { padding: .45rem .8rem; border-radius: 20px; }
 .column.search { border: 2px dashed var(--accent); }
 .column.search h2 .q { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -139,7 +139,7 @@ a { color: var(--accent); }
   background: var(--col); border-radius: 12px; border: 2px solid transparent;
 }
 .column.drop { background: var(--drop); border-color: var(--accent); }
-.column h2 { font-size: 1rem; margin: 0; padding: .8rem 1rem .8rem 2rem; display: flex; gap: .5rem; align-items: center; }
+.column h2 { font-size: 1rem; margin: 0; padding: .56rem 1rem .56rem 2rem; display: flex; gap: .5rem; align-items: center; }
 .column h2 { background: var(--bar-bg); color: var(--bar-text); border-radius: 10px 10px 0 0; margin-bottom: .6rem; }
 .column .count { margin-left: auto; color: var(--bar-muted); font-weight: normal; }
 .column h2 .icon-btn { flex: none; width: 48px; min-height: 48px; font-size: 1.5rem; color: var(--bar-text); opacity: .65; }
@@ -443,6 +443,12 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 .reader-head button, .reader-head .icon-btn { color: var(--bar-text); background: transparent; border-color: transparent; }
 .reader-head button:hover:not(:disabled) { background: rgba(127, 127, 127, .22); }
 .reader-head .esc-hint { color: var(--bar-text); border-color: var(--bar-muted); opacity: .8; }
+/* Close: an X above the ESC key, one button with no visible surround of its own */
+.reader-head .reader-close { flex: none; display: flex; flex-direction: column; align-items: center; gap: .2rem;
+  min-height: 0; padding: .1rem .35rem; border: none; line-height: 1; }
+.reader-head .reader-close svg { display: block; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
+.reader-head .reader-close:hover:not(:disabled) { background: transparent; }
+.reader-head .reader-close:hover .esc-hint { opacity: 1; }
 
 /* Snooze: when a snoozed email comes back (shown on its card), and the date & time picker. */
 .card .snoozed { display: flex; align-items: center; gap: .3rem; font-size: .8rem; color: #b5651d; margin-top: .25rem; }
@@ -523,6 +529,7 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
   .reader { width: 100% !important; padding: .75rem; }
   .reader-head { margin: -.75rem -.75rem 0; padding: .75rem; }
   .reader-head .esc-hint { display: none; }
+  .reader-head .reader-close svg { width: 26px; height: 26px; }
   .actions { gap: .35rem; }
 }
 
