@@ -60,7 +60,7 @@ a { color: var(--accent); }
 .column.search { border: 2px dashed var(--accent); }
 .column.search h2 .q { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .column.search h2 .count { margin-left: auto; }
-.column.search .icon-btn { width: 39px; min-height: 39px; }
+.column.search .icon-btn { width: 48px; min-height: 48px; }
 .column .hint { padding: 0 .4rem; }
 .card .where {
   font-size: .75rem; color: var(--muted); white-space: nowrap;
@@ -134,8 +134,8 @@ a { color: var(--accent); }
 .column h2 { font-size: 1rem; margin: 0; padding: .8rem 1rem .8rem 2rem; display: flex; gap: .5rem; align-items: center; }
 .column h2 { background: var(--bar-bg); color: var(--bar-text); border-radius: 10px 10px 0 0; margin-bottom: .6rem; }
 .column .count { margin-left: auto; color: var(--bar-muted); font-weight: normal; }
-.column h2 .icon-btn { flex: none; width: 39px; min-height: 39px; font-size: 1.235rem; color: var(--bar-text); opacity: .65; }
-.column h2 .icon-btn svg { width: 25px; height: 25px; }
+.column h2 .icon-btn { flex: none; width: 48px; min-height: 48px; font-size: 1.5rem; color: var(--bar-text); opacity: .65; }
+.column h2 .icon-btn svg { width: 31px; height: 31px; }
 .column h2 .icon-btn:hover:not(:disabled) { opacity: 1; background: rgba(255,255,255,.14); }
 .column h2 .icon-btn.on { opacity: 1; color: #9fbf5a; }
 .column h2 .pick { accent-color: #9fbf5a; }

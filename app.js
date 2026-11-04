@@ -2564,6 +2564,9 @@ function decodePart(part) {
 
 const FRAME_HEAD = '<!doctype html><meta charset="utf-8"><base target="_blank"><style>' +
   'html,body{margin:0;color-scheme:light;background:#fff;color:#111;font:15px/1.5 system-ui,sans-serif;overflow-wrap:anywhere}' +
+  // The frame is always sized to fit its email, so it never needs a scrollbar of its own. One would narrow
+  // the text while it's being measured, and could flicker on and off as the frame changes size.
+  'html{overflow-y:hidden!important}' +
   'img{max-width:100%;height:auto}table{max-width:100%}' +
   '#mb-copy{position:absolute;z-index:9;font:12px system-ui,sans-serif;padding:2px 8px;border:1px solid #bbb;' +
   'border-radius:6px;background:#fde2e2;border-color:#f3a5a5;color:#8a1c1c;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.2)}</style>';
@@ -2666,7 +2669,20 @@ function bodyFrame(m) {
       if (hit) showAt(hit.rect, hit.addr); else hideSoon();
     });
     btn.addEventListener('click', (e) => { e.preventDefault(); copyAddress(btn.dataset.addr); btn.hidden = true; });
-    const fit = () => { frame.style.height = doc.documentElement.scrollHeight + 'px'; };
+    // Measured with the frame collapsed: an email sized to its window ("height:100%") would otherwise get
+    // taller every time the frame grew to fit it, without end. The holder keeps the reader's scroll in place.
+    const fit = () => {
+      const holder = frame.parentElement, de = doc.documentElement;
+      if (!holder) return;
+      holder.style.minHeight = holder.offsetHeight + 'px';
+      frame.style.minHeight = '0';
+      frame.style.height = '0';
+      const height = de.scrollHeight;
+      frame.style.height = height + 'px';
+      // A sideways scrollbar on a wide email takes room from the text; give it back.
+      frame.style.height = height + Math.max(0, de.scrollHeight - de.clientHeight) + 'px';
+      frame.style.minHeight = holder.style.minHeight = '';
+    };
     fit();
     new ResizeObserver(fit).observe(doc.body);
   });
@@ -2972,8 +2988,8 @@ function renderReplyBox(last, threadId, draft = null) {
   const group = people(true) > people(false);
   if (!group) { allBtn.disabled = true; allBtn.title = 'Only one other person in this conversation'; }
 
-  const sendBtn = el('button', { type: 'button' }, 'Send');
-  const sendArchive = el('button', { type: 'button', class: 'primary' }, 'Send + Archive');
+  const sendBtn = el('button', { type: 'button', class: 'primary' }, 'Send');
+  const sendArchive = el('button', { type: 'button' }, 'Send + Archive');
   const doSend = async (archiveAfter) => {
     if (rich.isEmpty()) { rich.editor.focus(); return; }
     sendBtn.disabled = sendArchive.disabled = true;
@@ -3238,6 +3254,25 @@ function readerHead(title) {
   return el('div', { class: 'reader-head' }, [el('h2', {}, title), widenButton(), esc, close]);
 }
 
+// A draft opens at the reply box, which is the last thing in the reader. The emails above it are still
+// loading and growing, so this stays at the bottom until they settle or Paul scrolls himself.
+function showReplyBox(reader, messages) {
+  let placed = -1;
+  const toBottom = () => {
+    if (!messages.isConnected || reader.scrollTop < placed) { stop(); return; }   // moved on, or he scrolled up
+    reader.scrollTop = reader.scrollHeight;
+    placed = reader.scrollTop;
+  };
+  const watch = new ResizeObserver(toBottom);
+  const timer = setTimeout(() => stop(), 5000);
+  function stop() {
+    watch.disconnect();
+    clearTimeout(timer);
+  }
+  watch.observe(messages);
+  toBottom();
+}
+
 async function openThread(id) {
   await flushReplyDraft();                 // save unsent reply text first, so reopening shows it
   state.openId = id;
@@ -3265,13 +3300,15 @@ async function openThread(id) {
     const unsub = renderUnsubscribe(msgs, id);
     state.unsub = unsub ? { id, el: unsub } : null;
     renderActions(actions, id);
+    const messages = renderMessages(msgs);
     reader.replaceChildren(
       readerHead(header(msgs[0] || {}, 'subject') || '(no subject)'),
       actions,
-      renderMessages(msgs),
+      messages,
       renderReplyBox(msgs[msgs.length - 1] || draftMsg, id, draft),
     );
     reader.scrollTop = 0;                    // the newest message starts at the top of the window
+    if (draft) showReplyBox(reader, messages);
     const t = state.threads.get(id);
     if (t?.unread) {
       await api(`/threads/${id}/modify`, { method: 'POST', body: { removeLabelIds: ['UNREAD'] } });
