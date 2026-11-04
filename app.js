@@ -1349,6 +1349,17 @@ async function checkReturned() {
   store.set('bumps', state.bumps);
 }
 
+// True when an email newer than any seen so far reached the Inbox column, so it can be brought into view.
+// Paul's own replies also make a thread newer, but they aren't new mail. Only sorts that put it on top count.
+function inboxGotNewMail(cols) {
+  const inbox = cols.findIndex((c) => c.inbox);
+  if (inbox < 0) return false;
+  const newest = Math.max(0, ...state.board[inbox].map((id) => state.threads.get(id)).filter((t) => !t.replied).map(sortTime));
+  const isNew = state.inboxNewest != null && newest > state.inboxNewest;
+  state.inboxNewest = Math.max(state.inboxNewest ?? 0, newest);
+  return isNew && ['newest', 'unread'].includes(sortOf(cols[inbox]).key);
+}
+
 async function loadBoard() {
   if (state.loading || state.dragging || state.addingColumn || !state.token) return;
   state.loading = true;
@@ -1382,7 +1393,9 @@ async function loadBoard() {
     for (const id of state.search?.ids || []) seen.add(id);
     for (const id of [...state.threads.keys()]) if (!seen.has(id)) state.threads.delete(id);
     assign(cols);
+    const newMail = inboxGotNewMail(cols);
     render();
+    if (newMail) $('#board').querySelectorAll('.cards')[state.search ? 1 : 0]?.scrollTo({ top: 0 });
     state.lastLoad = Date.now();
     setStatus('Updated ' + dateLabel(Date.now()));
     await loadCounts();
