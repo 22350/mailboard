@@ -1360,6 +1360,27 @@ function inboxGotNewMail(cols) {
   return isNew && ['newest', 'unread'].includes(sortOf(cols[inbox]).key);
 }
 
+// Jumping the column under the pointer could put a different email where Paul is aiming, so while the
+// pointer is over it, wait until the mouse rests. A small shake within STILL_PX counts as resting.
+const STILL_PX = 30, STILL_MS = 1000;
+const pointer = { x: -1, y: -1, anchorX: -1, anchorY: -1, movedAt: 0 };
+document.addEventListener('pointermove', (e) => {
+  pointer.x = e.clientX; pointer.y = e.clientY;
+  if (Math.hypot(e.clientX - pointer.anchorX, e.clientY - pointer.anchorY) > STILL_PX) {
+    pointer.anchorX = e.clientX; pointer.anchorY = e.clientY; pointer.movedAt = Date.now();
+  }
+}, { passive: true, capture: true });
+document.addEventListener('wheel', () => { pointer.movedAt = Date.now(); }, { passive: true, capture: true });
+let inboxTopTimer = null;
+function bringInboxToTop() {
+  clearTimeout(inboxTopTimer);
+  const cards = $('#board').querySelectorAll('.cards')[state.search ? 1 : 0];
+  const aiming = cards && document.elementFromPoint(pointer.x, pointer.y)?.closest('.cards') === cards
+    && Date.now() - pointer.movedAt < STILL_MS;
+  if (aiming || state.dragging || state.armedDelete) { inboxTopTimer = setTimeout(bringInboxToTop, 200); return; }
+  cards?.scrollTo({ top: 0 });
+}
+
 async function loadBoard() {
   if (state.loading || state.dragging || state.addingColumn || !state.token) return;
   state.loading = true;
@@ -1395,7 +1416,7 @@ async function loadBoard() {
     assign(cols);
     const newMail = inboxGotNewMail(cols);
     render();
-    if (newMail) $('#board').querySelectorAll('.cards')[state.search ? 1 : 0]?.scrollTo({ top: 0 });
+    if (newMail) bringInboxToTop();
     state.lastLoad = Date.now();
     setStatus('Updated ' + dateLabel(Date.now()));
     await loadCounts();
