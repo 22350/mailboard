@@ -367,6 +367,7 @@ async function ensureLabels(cols) {
         body: { name, labelListVisibility: 'labelShow', messageListVisibility: 'show' },
       });
       byName[name] = made.id;
+      storeUserLabel(made);                              // show the new label in the sidebar right away
     }
     state.labelIds[col.name] = byName[name];
   }
