@@ -3266,6 +3266,7 @@ function renderActions(box, id) {
       b.addEventListener('click', () => moveWithUndo(id, i));
       return b;
     }),
+    el('span', { class: 'row-break' }),     // the icons always start their own line
     colorBtn,
     iconButton('Snooze', 'clock', (b) => openSnoozeMenu(b, id)),
     iconButton('Archive', 'archive', () => archiveThread(id)),
@@ -3832,8 +3833,7 @@ async function openThread(id) {
     renderActions(actions, id);
     const messages = renderMessages(msgs);
     reader.replaceChildren(
-      readerHead(header(msgs[0] || {}, 'subject') || '(no subject)'),
-      actions,
+      el('div', { class: 'reader-top' }, [readerHead(header(msgs[0] || {}, 'subject') || '(no subject)'), actions]),
       messages,
       renderReplyBox(msgs[msgs.length - 1] || draftMsg, id, draft),
     );
