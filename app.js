@@ -4523,7 +4523,7 @@ async function start() {
 // deploy.sh stamps index.html with ?v=<version>. Poll for a newer stamp and
 // reload when it won't disrupt anything; otherwise offer a Reload button.
 const VERSION = /[?&]v=(\d+)/.exec(document.querySelector('script[src*="app.js"]')?.src || '')?.[1];
-let updateOffered = false;
+let updateReady = false;
 
 function canReloadQuietly() {
   if (state.dragging || state.addingColumn || state.typingCardLabel || state.selected.size || state.search) return false;
@@ -4540,17 +4540,32 @@ async function checkForUpdate() {
     const live = /app\.js\?v=(\d+)/.exec(html)?.[1];
     if (!live || live <= VERSION) return;
     if (canReloadQuietly()) { location.reload(); return; }
-    if (!updateOffered) {
-      updateOffered = true;
-      toast('StediMail was updated.', { label: 'Reload', run: () => location.reload() });
+    if (!updateReady) {
+      updateReady = true;
+      showUpdateButton();
+      setInterval(showUpdateButton, 2000);
     }
   } catch {} // offline or Pages hiccup: try again next time
+}
+
+// Stays in the top bar until used, rather than a message that goes away (Paul, 2026-11-05). It waits while
+// an email is being written, so a click can't throw away what's in the box.
+function isWritingEmail() {
+  const reader = $('#reader');
+  return [...reader.querySelectorAll('.reply-editor')].some((e) => e.innerText.trim())
+    || [...reader.querySelectorAll('.compose input')].some((f) => f.value.trim())
+    || !!reader.querySelector('.reply-files .chip');
+}
+
+function showUpdateButton() {
+  $('#btn-update').hidden = !updateReady || isWritingEmail();
 }
 
 function watchForUpdates() {
   // The service worker is what lets the browser offer "Install StediMail".
   navigator.serviceWorker?.register('sw.js').catch(() => {});
   setupInstallButton();
+  $('#btn-update').addEventListener('click', () => location.reload());
   if (!VERSION) return;
   setInterval(checkForUpdate, 5 * 60 * 1000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) checkForUpdate(); });

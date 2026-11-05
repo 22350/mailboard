@@ -585,7 +585,7 @@ button.danger:disabled { opacity: .45; cursor: default; }
 
 /* Report issue */
 .report-btn { font-weight: 600; }
-.install-btn { font-weight: 600; margin-left: .5rem; background: rgba(120, 180, 90, .22) !important; border-color: rgba(140, 200, 100, .55) !important; }
+.install-btn { font-weight: 600; margin-left: .5rem; white-space: nowrap; background: rgba(120, 180, 90, .22) !important; border-color: rgba(140, 200, 100, .55) !important; }
 #btn-undo:disabled { opacity: .45; cursor: default; }
 dialog.report { max-width: 560px; width: calc(100% - 32px); border-radius: 14px; padding: 20px 22px; }
 dialog.report h2 { margin: 0 0 14px; font-size: 20px; }
