@@ -3387,7 +3387,7 @@ function richEditor(placeholder, changed) {
     tool('Underline', 'U', () => fmt('underline'), 'u'),
     tool('Bulleted list', '•', () => fmt('insertUnorderedList')), tool('Numbered list', '1.', () => fmt('insertOrderedList')),
     el('span', { class: 'sep' }),
-    tool('Attach files', '📎', () => picker.click()), tool('Insert link', '🔗', linkTool),
+    tool('Attach files', 'Attach file', () => picker.click(), 'word'), tool('Insert link', 'Insert link', linkTool, 'word'),
     tool('Emoji', '😊', () => { emojiPop.hidden = !emojiPop.hidden; }),
   ];
   return {

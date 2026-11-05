@@ -419,6 +419,7 @@ body.reader-resizing, body.reader-resizing * { cursor: ew-resize !important; use
 .reply-files .chip button { width: 24px; min-height: 24px; padding: 0; border: none; background: transparent; color: var(--muted); }
 .reply-tools { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; }
 .reply-tools .tool { width: 36px; min-height: 36px; padding: 0; font-size: 1rem; }
+.reply-tools .tool.word { width: auto; padding: 0 .6rem; font-size: .9rem; white-space: nowrap; }
 .reply-tools .tool.b { font-weight: 700; } .reply-tools .tool.i { font-style: italic; } .reply-tools .tool.u { text-decoration: underline; }
 .reply-tools .tool svg { display: block; margin: auto; width: 20px; height: 20px; fill: currentColor; }
 .reply-tools .tool.listening, .dictate-center.listening, .dictate-center.listening:hover { background: #d93025; border-color: #d93025; color: #fff; }
