@@ -734,6 +734,9 @@ async function fetchSummaries(listed) {
 }
 
 // Show a search, or a sidebar folder, as the extra column left of the board.
+// Gmail leaves Spam and Trash out of a search unless told to include them.
+const searchesSpamTrash = (q) => /(^|\s)in:(anywhere|trash|spam)(\s|$)/i.test(q);
+
 async function runSearch(q, folder) {
   q = (q || '').trim();
   if (q && !folder) rememberSearch(q);
@@ -747,7 +750,7 @@ async function runSearch(q, folder) {
     const p = new URLSearchParams({ maxResults: '50' });
     if (folder?.q || q) p.set('q', folder?.q || q);
     if (folder?.label) p.set('labelIds', folder.label);
-    if (folder?.spamTrash) p.set('includeSpamTrash', 'true');
+    if (folder?.spamTrash || searchesSpamTrash(q)) p.set('includeSpamTrash', 'true');
     const r = await api('/threads?' + p);
     const listed = r.threads || [];
     const ok = await fetchSummaries(listed);
@@ -821,7 +824,7 @@ const searchLabel = (name) => name.toLowerCase().replace(/[\s/]+/g, '-');
 function columnScope(key) {
   if (key < 0) {
     const { q, folder } = state.searchArgs;
-    return { q: folder?.q || q || '', labelIds: folder?.label, spamTrash: folder?.spamTrash, name: state.search.title || `“${q}”` };
+    return { q: folder?.q || q || '', labelIds: folder?.label, spamTrash: folder?.spamTrash || searchesSpamTrash(q || ''), name: state.search.title || `“${q}”` };
   }
   const cols = columns();
   const col = cols[key];
@@ -2212,6 +2215,7 @@ const ICONS = {
   mic: 'M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z',
   widen: 'M4 12l4-4v3h8V8l4 4-4 4v-3H8v3z',
   person: 'M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z',
+  download: 'M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z',
   mail: 'M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z',
   search: 'M15.5 14h-.79l-.28-.27A6.47 6.47 0 0016 9.5 6.5 6.5 0 109.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z',
   narrow: 'M10 12L6 8v3H2v2h4v3zm4 0l4-4v3h4v2h-4v3z',
@@ -3141,9 +3145,11 @@ function openDownloads(anchor) {
       el('span', { class: 'name' }, d.filename), el('time', {}, dateLabel(d.at)),
     ]);
     name.addEventListener('click', () => openDownload(d));
+    const save = el('button', { type: 'button', class: 'open-email', title: 'Download', 'aria-label': `Download ${d.filename}` }, icon('download'));
+    save.addEventListener('click', () => downloadAgain(d));
     const open = el('button', { type: 'button', class: 'open-email', title: 'Open its email', 'aria-label': `Open the email with ${d.filename}` }, icon('mail'));
     open.addEventListener('click', () => openThread(d.threadId));
-    menu.append(el('div', { class: 'row' }, [name, open]));
+    menu.append(el('div', { class: 'row' }, [name, save, open]));
   }
   document.body.append(menu);
   placePopup(menu, anchor);
@@ -3888,9 +3894,26 @@ function loadContacts() {
   return contactsLoad;
 }
 
+// Gmail ignores dots and anything after a + in its addresses, so these all reach the same mailbox.
+const sameMailbox = (a, b) => {
+  const plain = (addr) => {
+    const [local, domain] = addr.toLowerCase().split('@');
+    return /^(gmail|googlemail)\.com$/.test(domain) ? local.split('+')[0].replace(/\./g, '') + '@gmail.com' : addr.toLowerCase();
+  };
+  return plain(a) === plain(b);
+};
+
+let ownName = null;
+function loadOwnName() {
+  ownName ||= api('/settings/sendAs').then((r) => (r.sendAs || []).find((x) => x.isPrimary)?.displayName || '').catch(() => '');
+  return ownName;
+}
+
 async function contactMatches(q) {
+  const me = state.me.toLowerCase();
   const seen = new Map();
-  const add = (c) => { if (c.addr && c.addr !== state.me.toLowerCase() && !seen.has(c.addr)) seen.set(c.addr, c); };
+  const add = (c) => { if (c.addr && !sameMailbox(c.addr, me) && !seen.has(c.addr)) seen.set(c.addr, c); };   // their own comes once, below
+  seen.set(me, { name: await loadOwnName(), addr: me, saved: true });
   (await loadContacts()).forEach(add);
   for (const t of [...state.threads.values(), ...state.suggestCache.values()]) (t.senders || []).forEach((p) => add({ name: p.name, addr: p.addr }));
   const lq = q.toLowerCase();
@@ -4277,6 +4300,9 @@ function onKey(e) {
 // emails (loaded ones at once, then Gmail's own search), and "All search results" (Enter).
 state.suggestCache = new Map();
 const QUICK_FILTERS = [['Has attachment', 'has:attachment'], ['Last 7 days', 'newer_than:7d'], ['From me', 'from:me']];
+// Where to look (Paul, 2026-11-05). One at a time, so choosing another replaces it.
+const SEARCH_PLACES = [['Search all mail', 'in:anywhere', 'Everything, including Spam and Trash'], ['Search sent', 'in:sent', 'Sent mail'], ['Search trash', 'in:trash', 'Trash']];
+const SEARCH_PLACE = /(^|\s)in:(anywhere|sent|trash)(?=\s|$)/gi;
 
 function rememberSearch(q) {
   q = (q || '').trim();
@@ -4320,11 +4346,15 @@ function setupSearchSuggest() {
     panel.replaceChildren(...parts());
     panel.hidden = false;
   };
-  const chips = () => el('div', { class: 'suggest-chips' }, QUICK_FILTERS.map(([label, op]) => {
+  const chips = () => el('div', { class: 'suggest-chips' }, [...SEARCH_PLACES.map(([label, op, title]) => {
+    const b = el('button', { type: 'button', class: 'chip', title }, label);
+    b.addEventListener('mousedown', (e) => { e.preventDefault(); go(`${input.value.replace(SEARCH_PLACE, ' ').trim()} ${op}`.trim()); });
+    return b;
+  }), ...QUICK_FILTERS.map(([label, op]) => {
     const b = el('button', { type: 'button', class: 'chip' }, label);
     b.addEventListener('mousedown', (e) => { e.preventDefault(); go(`${input.value.trim()} ${op}`.trim()); });
     return b;
-  }));
+  })]);
   const recents = () => store.get('recentSearches', []);
   const emailRow = (t, q) => row('mail',
     el('span', { class: 'suggest-text' }, [el('span', { class: 'suggest-label' }, highlight(t.subject, q)),
@@ -4357,7 +4387,7 @@ function setupSearchSuggest() {
     showTyping(q, localEmails(q.toLowerCase()));
     timer = setTimeout(async () => {                         // then ask Gmail, once typing pauses
       try {
-        const r = await api(`/threads?q=${encodeURIComponent(q)}&maxResults=5`);
+        const r = await api(`/threads?q=${encodeURIComponent(q)}&maxResults=5${searchesSpamTrash(q) ? '&includeSpamTrash=true' : ''}`);
         if (mine !== seq) return;
         const found = [];
         await mapLimit(r.threads || [], 3, async (x) => {
