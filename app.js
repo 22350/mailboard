@@ -2215,7 +2215,6 @@ const ICONS = {
   mic: 'M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z',
   widen: 'M4 12l4-4v3h8V8l4 4-4 4v-3H8v3z',
   person: 'M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z',
-  download: 'M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z',
   mail: 'M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z',
   search: 'M15.5 14h-.79l-.28-.27A6.47 6.47 0 0016 9.5 6.5 6.5 0 109.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z',
   narrow: 'M10 12L6 8v3H2v2h4v3zm4 0l4-4v3h4v2h-4v3z',
@@ -3145,11 +3144,9 @@ function openDownloads(anchor) {
       el('span', { class: 'name' }, d.filename), el('time', {}, dateLabel(d.at)),
     ]);
     name.addEventListener('click', () => openDownload(d));
-    const save = el('button', { type: 'button', class: 'open-email', title: 'Download', 'aria-label': `Download ${d.filename}` }, icon('download'));
-    save.addEventListener('click', () => downloadAgain(d));
     const open = el('button', { type: 'button', class: 'open-email', title: 'Open its email', 'aria-label': `Open the email with ${d.filename}` }, icon('mail'));
     open.addEventListener('click', () => openThread(d.threadId));
-    menu.append(el('div', { class: 'row' }, [name, save, open]));
+    menu.append(el('div', { class: 'row' }, [name, open]));
   }
   document.body.append(menu);
   placePopup(menu, anchor);
