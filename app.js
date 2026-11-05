@@ -4030,8 +4030,8 @@ function openCompose(draft = null) {
     toBox, subject, el('div', { class: 'reply-frame' }, [rich.editor, dictation.center]), rich.chips, rich.emojiPop,
     el('div', { class: 'reply-tools' }, [send, el('span', { class: 'sep' }), ...rich.formatTools, dictation.toolbar]), rich.picker,
   ]);
-  // Filling in To and Subject comes first here, so those leave the big microphone in place.
-  box.addEventListener('pointerdown', (e) => { if (!e.target.closest('input')) dictation.dismiss(e.target); });
+  // Filling in To (with its suggestions) and Subject comes first here, so those leave the big microphone in place.
+  box.addEventListener('pointerdown', (e) => { if (!e.target.closest('input, .to-wrap')) dictation.dismiss(e.target); });
   reader.replaceChildren(readerHead(draft ? 'Draft' : 'New message'), box);
   reader.hidden = false;
   attachContactSuggest(to);
