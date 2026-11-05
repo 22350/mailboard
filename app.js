@@ -970,6 +970,12 @@ async function runBulk(action, arg) {
   }
 }
 
+// Spam or Trash with nothing left in it: its column goes too.
+function closeEmptiedFolder() {
+  const label = state.searchArgs?.folder?.label;
+  if ((label === 'SPAM' || label === 'TRASH') && !state.search?.ids.length && !state.search?.more) clearSearch();
+}
+
 async function bulkDeleteForever(all) {
   if (!all) {
     if (await deleteForever([...state.selected])) clearSelection();
@@ -987,11 +993,20 @@ async function bulkDeleteForever(all) {
     clearSelection();
     setStatus('');
     await refreshAfterBulk();
+    closeEmptiedFolder();
     toast(`Deleted forever: ${ids.length.toLocaleString()} messages`);
   } catch (e) {
     setStatus('');
     if (!(e instanceof AuthError)) toast('Could not delete: ' + e.message);
   }
+}
+
+// Spam and Trash's "delete all": no ticking boxes first (Paul, 2026-11-05).
+async function deleteWholeFolder() {
+  const scope = columnScope(-1);
+  let total = null;
+  try { total = await scopeTotal(scope); } catch (e) { if (e instanceof AuthError) return; }
+  await bulkDeleteForever({ scope, total });
 }
 
 function linkButton(text, run) {
@@ -1857,6 +1872,7 @@ async function deleteForever(threadIds) {
     setStatus('');
     assign(columns());
     render();
+    closeEmptiedFolder();
     toast(n === 1 ? 'Deleted forever' : `Deleted forever: ${n.toLocaleString()} conversations`);
     return true;
   } catch (e) {
@@ -1947,10 +1963,212 @@ async function upload(path, method, meta, mime) {
     method,
     headers: { Authorization: 'Bearer ' + state.token, 'Content-Type': `multipart/related; boundary=${b}` },
     body: new Blob([head, mime, utf8(`\r\n--${b}--`)]),
-  });
+  }).catch(() => { throw new Error('Gmail didn\'t accept it. The connection dropped, or the message is too big.'); });
   if (res.status === 401) { needSignIn(); throw new AuthError('Session expired'); }
   if (!res.ok) { let msg = res.statusText; try { msg = (await res.json()).error.message; } catch {} throw new Error(msg); }
   return res.json();
+}
+
+// ---------- big attachments: Google Drive links ----------
+
+// Gmail refuses messages over 25 MB, and attachments grow by about a third when encoded for email.
+const EMAIL_ATTACH_LIMIT = 18e6;
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';   // only files StediMail itself puts there
+const DRIVE_TRIES = 3;
+const driveAuth = { token: null, exp: 0, pending: null };
+
+const fileSize = (n) => (n < 1e6 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1e6).toFixed(1)} MB`);
+
+// Which of the picked files still fit in the email; the rest need a Drive link.
+function splitForEmail(current, picked) {
+  let room = EMAIL_ATTACH_LIMIT - current.reduce((sum, f) => sum + f.size, 0);
+  const fit = [], big = [];
+  for (const f of [...picked].sort((a, b) => a.size - b.size)) {
+    if (f.size <= room) { fit.push(f); room -= f.size; } else big.push(f);
+  }
+  return { fit, big };
+}
+
+// Its own sign-in, asked for the first time it's needed, so nobody else ever sees a Drive permission
+// and the Gmail sign-in is left alone.
+function driveSignIn() {
+  if (driveAuth.token && Date.now() < driveAuth.exp) return Promise.resolve(driveAuth.token);
+  if (driveAuth.pending) return driveAuth.pending;
+  driveAuth.pending = new Promise((resolve, reject) => {
+    google.accounts.oauth2.initTokenClient({
+      client_id: settings.clientId,
+      scope: DRIVE_SCOPE,
+      include_granted_scopes: false,
+      callback: (resp) => {
+        if (resp.error || !google.accounts.oauth2.hasGrantedAllScopes(resp, DRIVE_SCOPE)) {
+          reject(new Error('Google Drive permission wasn\'t given'));
+          return;
+        }
+        driveAuth.token = resp.access_token;
+        driveAuth.exp = Date.now() + (Number(resp.expires_in) - 60) * 1000;
+        resolve(driveAuth.token);
+      },
+      error_callback: (err) => reject(new Error(err.type === 'popup_closed'
+        ? 'The Google window was closed' : 'Google Drive sign-in failed: ' + err.type)),
+    }).requestAccessToken({ login_hint: state.me });
+  }).finally(() => { driveAuth.pending = null; });
+  return driveAuth.pending;
+}
+
+async function driveError(res) {
+  let msg = res.statusText;
+  try { msg = (await res.json()).error.message; } catch {}
+  const e = new Error(msg);
+  e.retry = res.status >= 500;
+  return e;
+}
+
+function drivePut(url, file, onProgress, onStart) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', url);
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) { resolve(JSON.parse(xhr.responseText)); return; }
+      const e = new Error(`Google Drive answered ${xhr.status}`);
+      e.retry = xhr.status >= 500;
+      reject(e);
+    };
+    xhr.onerror = () => { const e = new Error('The connection dropped'); e.retry = true; reject(e); };
+    xhr.onabort = () => reject(new Error('Stopped'));
+    onStart(() => xhr.abort());
+    xhr.send(file);
+  });
+}
+
+// Upload to the sender's own Drive, private to them until the email goes out; returns { id, url }.
+async function shareOnDrive(file, onProgress, onStart, attempt = 1) {
+  const token = await driveSignIn();
+  const auth = { Authorization: 'Bearer ' + token };
+  try {
+    const type = file.type || 'application/octet-stream';
+    const begin = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,webViewLink', {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': type, 'X-Upload-Content-Length': String(file.size) },
+      body: JSON.stringify({ name: file.name }),
+    });
+    if (!begin.ok) throw await driveError(begin);
+    const made = await drivePut(begin.headers.get('Location'), file, onProgress, onStart);
+    return { id: made.id, url: made.webViewLink };
+  } catch (e) {
+    if (e.retry && attempt < DRIVE_TRIES) {
+      await sleep(1000 * attempt);
+      return shareOnDrive(file, onProgress, onStart, attempt + 1);
+    }
+    throw e;
+  }
+}
+
+// Just before an email goes out: its recipients, and only they, can open its Drive files. An address with no
+// Google account can't be added quietly, so Drive emails that person a way in.
+async function shareDriveFiles(ids, headers) {
+  if (!ids.length) return;
+  const people = [...new Set([headers.To, headers.Cc].filter(Boolean).flatMap(splitAddrs).map(addrOf))]
+    .filter((a) => a.includes('@') && a !== state.me.toLowerCase());
+  const token = await driveSignIn();
+  const grant = (id, emailAddress, notify) => fetch(`https://www.googleapis.com/drive/v3/files/${id}/permissions?sendNotificationEmail=${notify}`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role: 'reader', type: 'user', emailAddress }),
+  });
+  for (const id of ids) {
+    for (const person of people) {
+      let res = await grant(id, person, false);
+      if (res.status === 400) res = await grant(id, person, true);
+      if (!res.ok) throw new Error(`Could not give ${person} access to the Drive file: ${(await driveError(res)).message}`);
+    }
+  }
+}
+
+// Downloading a Drive file someone sent, inside StediMail. drive.file can only read a file the person has
+// chosen, so if Drive refuses, Google's own picker (its window, showing only this file) asks them to confirm it.
+const PICKER_API_KEY = 'AIzaSyDaoCSvTB0c6JNNM_OFjRC3hyW6K8k-xD8';          // restricted to StediMail's sites and the Picker API, so not a secret
+const PICKER_APP_ID = '922000608082';
+let pickerLoading = null;
+
+function loadPicker() {
+  pickerLoading ||= new Promise((resolve, reject) => {
+    const failed = () => { pickerLoading = null; reject(new Error('Google\'s file window didn\'t load')); };
+    const go = () => gapi.load('picker', { callback: resolve, onerror: failed });
+    if (window.gapi) { go(); return; }
+    const s = document.createElement('script');
+    s.src = 'https://apis.google.com/js/api.js';
+    s.onload = go;
+    s.onerror = failed;
+    document.head.append(s);
+  });
+  return pickerLoading;
+}
+
+async function confirmDriveFile(id, token) {
+  await loadPicker();
+  return new Promise((resolve) => {
+    const P = google.picker;
+    new P.PickerBuilder()
+      .addView(new P.DocsView().setFileIds(id).setMode(P.DocsViewMode.LIST))
+      .setOAuthToken(token).setDeveloperKey(PICKER_API_KEY).setAppId(PICKER_APP_ID)
+      .setTitle('Select the file to download it')
+      .setCallback((data) => {
+        const action = data[P.Response.ACTION];
+        if (action === P.Action.PICKED) resolve(true);
+        else if (action === P.Action.CANCEL) resolve(false);
+      })
+      .build().setVisible(true);
+  });
+}
+
+// The file as { blob, name, type }, or null if the person backed out of confirming it.
+async function fetchDriveFile(id, onProgress) {
+  const token = await driveSignIn();
+  const auth = { Authorization: 'Bearer ' + token };
+  const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}`;
+  let meta = await fetch(`${url}?fields=name,mimeType,size`, { headers: auth });
+  if (meta.status === 403 || meta.status === 404) {
+    if (!await confirmDriveFile(id, token)) return null;
+    meta = await fetch(`${url}?fields=name,mimeType,size`, { headers: auth });
+  }
+  if (!meta.ok) throw await driveError(meta);
+  const { name, mimeType, size } = await meta.json();
+  const res = await fetch(`${url}?alt=media`, { headers: auth });
+  if (!res.ok) throw await driveError(res);
+  const chunks = [];
+  let got = 0;
+  for (const reader = res.body.getReader(); ;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    got += value.length;
+    if (size) onProgress(got / Number(size));
+  }
+  return { blob: new Blob(chunks, { type: mimeType }), name, type: mimeType };
+}
+
+async function downloadDriveFile(id, msgId, threadId, onProgress = () => {}) {
+  try {
+    const f = await fetchDriveFile(id, onProgress);
+    if (!f) return;
+    saveBlob(f.blob, f.name);
+    rememberDownload(msgId, threadId, f.name, id);
+  } catch (e) {
+    toast('Download failed: ' + e.message);
+  }
+}
+
+// Drive files StediMail put in this email (their links are marked when it's sent).
+function driveFilesIn(m) {
+  const html = findPart(m.payload, 'text/html');
+  if (!html) return [];
+  const doc = new DOMParser().parseFromString(decodePart(html), 'text/html');
+  return [...doc.querySelectorAll('a[data-drive-file]')].map((a) => ({ id: a.dataset.driveFile, name: a.textContent.trim() }));
+}
+
+function removeFromDrive(id) {
+  fetch(`https://www.googleapis.com/drive/v3/files/${id}`, { method: 'DELETE', headers: { Authorization: 'Bearer ' + driveAuth.token } }).catch(() => {});
 }
 
 const addrOf = (s) => (/<([^>]+)>/.exec(s)?.[1] || s).trim().toLowerCase();
@@ -2316,8 +2534,15 @@ function renderSearchColumn() {
   if (sort.key !== 'newest') ids.sort((a, b) => sort.cmp(state.threads.get(a), state.threads.get(b)));
   const sortBtn = iconButton(`Sort: ${sort.label}`, 'sort', (b) => openSortMenu(b, col));
   if (sort.key !== 'newest') sortBtn.classList.add('on');
+  let deleteAll = null;
+  const folderLabel = state.searchArgs?.folder?.label;
+  if ((folderLabel === 'SPAM' || folderLabel === 'TRASH') && ids.length) {
+    deleteAll = el('button', { type: 'button', class: 'delete-all' }, folderLabel === 'SPAM' ? 'Delete all spam' : 'Empty trash');
+    deleteAll.addEventListener('click', deleteWholeFolder);
+  }
   const node = el('section', { class: 'column search', 'data-col': '-1' }, [
     el('h2', {}, [columnCheckbox(-1), el('span', { class: 'q' }, title || `“${q}”`), el('span', { class: 'count' }, ids.length + (more ? '+' : '')), sortBtn, close]),
+    deleteAll,
     el('div', { class: 'cards' }, ids.length
       ? ids.map((id) => renderCard(state.threads.get(id), -1))
       : title ? el('p', { class: 'hint' }, 'Nothing here.') : noMatches(q)),
@@ -2805,15 +3030,19 @@ function bodyFrame(m) {
   return frame;
 }
 
+function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = el('a', { href: url, download: filename });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
 async function downloadAttachment(msgId, part, threadId) {
   try {
     const r = await api(`/messages/${msgId}/attachments/${part.body.attachmentId}`);
-    const url = URL.createObjectURL(new Blob([b64urlBytes(r.data)], { type: part.mimeType }));
-    const a = el('a', { href: url, download: part.filename });
-    document.body.append(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    saveBlob(new Blob([b64urlBytes(r.data)], { type: part.mimeType }), part.filename);
     rememberDownload(msgId, threadId, part.filename);
   } catch (e) {
     if (!(e instanceof AuthError)) toast('Download failed: ' + e.message);
@@ -2823,9 +3052,16 @@ async function downloadAttachment(msgId, part, threadId) {
 // The Downloads button lists attachments saved through StediMail, kept in this browser. It can't see the
 // computer's Downloads folder: a web page isn't allowed to, so a listed file may since have been moved.
 const DOWNLOADS_KEPT = 50;
-function rememberDownload(msgId, threadId, filename) {
+// The icon stays red from a new download until it's next clicked (Paul, 2026-11-05).
+function markDownloads(unseen) {
+  store.set('downloadsUnseen', unseen);
+  $('#btn-downloads').classList.toggle('unseen', unseen);
+}
+
+function rememberDownload(msgId, threadId, filename, driveId) {
   const others = store.get('downloads', []).filter((d) => d.msgId !== msgId || d.filename !== filename);
-  store.set('downloads', [{ msgId, threadId, filename, at: Date.now() }, ...others].slice(0, DOWNLOADS_KEPT));
+  if (others.length === store.get('downloads', []).length) markDownloads(true);   // new to the list, not a repeat
+  store.set('downloads', [{ msgId, threadId, filename, at: Date.now(), ...(driveId ? { driveId } : {}) }, ...others].slice(0, DOWNLOADS_KEPT));
 }
 
 // Gmail's attachment ids don't last, so find the file in its message again by name.
@@ -2835,6 +3071,7 @@ async function downloadedPart(d) {
 }
 
 async function downloadAgain(d) {
+  if (d.driveId) { await downloadDriveFile(d.driveId, d.msgId, d.threadId); return; }
   try {
     const part = await downloadedPart(d);
     if (part) await downloadAttachment(d.msgId, part, d.threadId);
@@ -2861,6 +3098,20 @@ async function openDownload(d) {
     return;
   }
   const tab = window.open('', '_blank');         // now, while it still counts as the click: pop-up blockers
+  if (d.driveId) {
+    try {
+      const f = await fetchDriveFile(d.driveId, () => {});
+      if (!f || !tab) { tab?.close(); if (f) toast('Allow pop-ups for StediMail to open files'); return; }
+      const url = URL.createObjectURL(new Blob([f.blob], { type }));
+      tab.opener = null;
+      tab.location = url;
+      setTimeout(() => URL.revokeObjectURL(url), 300000);
+    } catch (e) {
+      tab?.close();
+      toast('Could not open it: ' + e.message);
+    }
+    return;
+  }
   try {
     const part = await downloadedPart(d);
     if (!part) { tab?.close(); toast(`“${d.filename}” is no longer in that email`); return; }
@@ -2877,6 +3128,7 @@ async function openDownload(d) {
 }
 
 function openDownloads(anchor) {
+  markDownloads(false);
   if ($('#menu.downloads')) { closeMenu(); return; }
   closeMenu();
   closeColorPicker();
@@ -2962,12 +3214,24 @@ function renderMessage(m, expanded) {
     details.append(bodyFrame(m));
     const shownInside = referencedCids(m);           // pictures shown in the email aren't listed as files
     const files = attachmentsOf(m.payload).filter((p) => !shownInside.has(p));
-    if (files.length) {
-      details.append(el('div', { class: 'files' }, files.map((p) => {
+    const driveFiles = driveFilesIn(m);
+    if (files.length || driveFiles.length) {
+      details.append(el('div', { class: 'files' }, [...files.map((p) => {
         const b = el('button', {}, '📎 ' + p.filename);
         b.addEventListener('click', () => downloadAttachment(m.id, p, m.threadId));
         return b;
-      })));
+      }), ...driveFiles.map((f) => {
+        const label = '☁ ' + f.name;
+        const b = el('button', { title: 'Download from Google Drive' }, label);
+        b.addEventListener('click', async () => {
+          if (b.disabled) return;
+          b.disabled = true;
+          await downloadDriveFile(f.id, m.id, m.threadId, (part) => { b.textContent = `${label}: ${Math.round(part * 100)}%`; });
+          b.textContent = label;
+          b.disabled = false;
+        });
+        return b;
+      })]));
     }
   };
   details.open = expanded;
@@ -3041,18 +3305,64 @@ async function flushReplyDraft() {
 // Formatted editor with attachments, shared by the reply box and the compose window: the editor, its
 // attachment chips, emoji pop-up and the formatting buttons (B I U, lists, attach, link, emoji).
 function richEditor(placeholder, changed) {
-  const files = [];
+  const files = [], links = [];   // links: files too big for email, on the way to Drive or already there
   const editor = el('div', { class: 'reply-editor', contenteditable: 'true', role: 'textbox', 'aria-multiline': 'true',
     'data-placeholder': placeholder });
   editor.addEventListener('input', changed);
   const chips = el('div', { class: 'reply-files' });
-  const renderChips = () => chips.replaceChildren(...files.map((f, i) => {
-    const x = el('button', { type: 'button', title: 'Remove', 'aria-label': `Remove ${f.name}` }, '✕');
-    x.addEventListener('click', () => { files.splice(i, 1); changed(); renderChips(); });
-    return el('span', { class: 'chip' }, [`📎 ${f.name} (${Math.max(1, Math.round(f.size / 1024))} KB)`, x]);
-  }));
+  const removeBtn = (name, run) => {
+    const x = el('button', { type: 'button', title: 'Remove', 'aria-label': `Remove ${name}` }, '✕');
+    x.addEventListener('click', run);
+    return x;
+  };
+  const linkText = (l) => (l.status === 'uploading' ? `☁ ${l.file.name}: uploading to Drive ${l.percent}%`
+    : l.status === 'ready' ? `☁ ${l.file.name} (${fileSize(l.file.size)}), Drive link`
+      : `☁ ${l.file.name}: didn't upload. Remove it and attach it again.`);
+  const removeLink = (l) => {
+    links.splice(links.indexOf(l), 1);
+    l.abort?.();
+    if (l.id) removeFromDrive(l.id);     // never sent, so it needn't stay in their Drive
+    changed();
+    renderChips();
+  };
+  const renderChips = () => chips.replaceChildren(
+    ...files.map((f, i) => el('span', { class: 'chip' }, [`📎 ${f.name} (${fileSize(f.size)})`,
+      removeBtn(f.name, () => { files.splice(i, 1); changed(); renderChips(); })])),
+    ...links.map((l) => {
+      l.label = el('span', { role: 'status' }, linkText(l));
+      return el('span', { class: 'chip' + (l.status === 'failed' ? ' failed' : '') }, [l.label, removeBtn(l.file.name, () => removeLink(l))]);
+    }),
+  );
+  const startLink = (file) => {
+    const l = { file, status: 'uploading', percent: 0 };
+    links.push(l);
+    l.done = shareOnDrive(file, (part) => {
+      l.percent = Math.round(part * 100);
+      if (l.label) l.label.textContent = linkText(l);       // only the words, so the ✕ stays still under the pointer
+    }, (abort) => { l.abort = abort; }).then((r) => {
+      l.status = 'ready';
+      l.id = r.id;
+      l.url = r.url;
+      changed();
+    }).catch((e) => {
+      l.status = 'failed';
+      if (links.includes(l)) toast(`Could not upload ${file.name}: ${e.message}`);
+    }).finally(() => { l.abort = null; if (links.includes(l)) renderChips(); });
+  };
+  const addFiles = async (picked) => {
+    const { fit, big } = splitForEmail(files, picked);
+    files.push(...fit);
+    if (fit.length) { changed(); renderChips(); }
+    if (!big.length) return;
+    const names = big.map((f) => `${f.name} (${fileSize(f.size)})`).join(', ');
+    const yes = await askConfirm(`${names} ${big.length > 1 ? 'are' : 'is'} too big to send with the email. Upload to your Google Drive and put a link in the email?\n\nOnly the people you send the email to can open it, and they need to be signed in with that address. It stays in your Drive until you delete it.`, 'Upload to Drive');
+    if (!yes) { toast('Not attached: too big for email'); return; }
+    big.forEach(startLink);
+    changed();
+    renderChips();
+  };
   const picker = el('input', { type: 'file', multiple: '', hidden: '' });
-  picker.addEventListener('change', () => { files.push(...picker.files); picker.value = ''; changed(); renderChips(); });
+  picker.addEventListener('change', () => { const picked = [...picker.files]; picker.value = ''; addFiles(picked); });
 
   const fmt = (cmd, arg) => { editor.focus(); document.execCommand(cmd, false, arg); };
   const tool = (label, text, run, cls = '') => {
@@ -3079,8 +3389,24 @@ function richEditor(placeholder, changed) {
   ];
   return {
     editor, chips, emojiPop, picker, files, formatTools,
-    isEmpty: () => !editor.innerText.trim() && !files.length,
-    content: () => ({ text: editor.innerText, html: editor.innerHTML, files }),
+    isEmpty: () => !editor.innerText.trim() && !files.length && !links.length,
+    content: () => {
+      const ready = links.filter((l) => l.status === 'ready');
+      return {
+        text: editor.innerText + ready.map((l) => `\n\n${l.file.name} (${fileSize(l.file.size)}): ${l.url}`).join(''),
+        html: editor.innerHTML + ready.map((l) => `<div><br></div><div>☁ <a data-drive-file="${escapeHtml(l.id)}" href="${escapeHtml(l.url)}">${escapeHtml(l.file.name)}</a> (${fileSize(l.file.size)}, Google Drive)</div>`).join(''),
+        files,
+      };
+    },
+    notReady() {                                    // why it can't be sent yet, if so
+      const l = links.find((x) => x.status !== 'ready');
+      return l && (l.status === 'uploading' ? `Still uploading ${l.file.name}` : `${l.file.name} didn't upload. Remove it first.`);
+    },
+    settled: () => Promise.all(links.map((l) => l.done)),
+    driveIds: () => [...new Set([   // this session's uploads, and any in the text of a reopened draft
+      ...links.map((l) => l.id),
+      ...[...editor.querySelectorAll('a[data-drive-file]')].map((a) => a.dataset.driveFile),
+    ])],
     loadDraft(message) {                            // pick up where Paul left off: text, formatting, attachments
       const html = findPart(message.payload, 'text/html'), text = findPart(message.payload, 'text/plain');
       editor.innerHTML = html ? cleanHtml(decodePart(html)) : escapeHtml(text ? decodePart(text) : '').replace(/\n/g, '<br>');
@@ -3188,12 +3514,14 @@ function renderReplyBox(last, threadId, draft = null) {
   const sendArchive = el('button', { type: 'button' }, 'Send + Archive');
   const doSend = async (archiveAfter) => {
     if (rich.isEmpty()) { rich.editor.focus(); return; }
+    if (rich.notReady()) { toast(rich.notReady()); return; }
     sendBtn.disabled = sendArchive.disabled = true;
     const was = archiveAfter ? sendArchive : sendBtn, label = was.textContent;
     was.textContent = 'Sending…';
     try {
-      const c = rich.content();
-      await sendMail(replyHeaders(last, replyAll), c.text, threadId, { html: c.html, files: c.files });
+      const c = rich.content(), h = replyHeaders(last, replyAll);
+      await shareDriveFiles(rich.driveIds(), h);
+      await sendMail(h, c.text, threadId, { html: c.html, files: c.files });
       if (state.replyDraft === me) state.replyDraft = null;      // sent: nothing to keep
       if (draftId) api(`/drafts/${draftId}`, { method: 'DELETE' }).catch(() => {});
       toast('Reply sent');
@@ -3221,6 +3549,7 @@ function renderReplyBox(last, threadId, draft = null) {
         if (draftId) await api(`/drafts/${draftId}`, { method: 'DELETE' });
         return;
       }
+      await rich.settled();
       const c = rich.content();
       draftId = await saveDraft(replyHeaders(last, replyAll), c.text, threadId, draftId, { html: c.html, files: c.files });
       dirty = false;
@@ -3649,6 +3978,7 @@ function openCompose(draft = null) {
         if (draftId) await api(`/drafts/${draftId}`, { method: 'DELETE' });
         return;
       }
+      await rich.settled();
       const c = rich.content();
       draftId = await saveDraft(headers(), c.text, null, draftId, { html: c.html, files: c.files });
       dirty = false;
@@ -3658,10 +3988,12 @@ function openCompose(draft = null) {
   const send = el('button', { type: 'button', class: 'primary' }, 'Send');
   send.addEventListener('click', async () => {
     if (!to.value.trim()) { to.focus(); return; }
+    if (rich.notReady()) { toast(rich.notReady()); return; }
     send.disabled = true;
     send.textContent = 'Sending…';
     try {
       const c = rich.content();
+      await shareDriveFiles(rich.driveIds(), headers());
       await sendMail(headers(), c.text, null, { html: c.html, files: c.files });
       if (state.replyDraft === me) state.replyDraft = null;      // sent: nothing to keep
       if (draftId) api(`/drafts/${draftId}`, { method: 'DELETE' }).catch(() => {});
@@ -4148,6 +4480,7 @@ async function start() {
   }
   applyColumnWidth(settings.colWidth);
   applyReaderWidth(settings.readerWidth);
+  markDownloads(store.get('downloadsUnseen', false));
   setupReaderResize();
   setupCopyFloat();
   show('board');
