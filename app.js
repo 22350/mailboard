@@ -228,6 +228,7 @@ function signOut() {
   state.threads.clear();
   try { sessionStorage.removeItem('token'); } catch {}
   closeReader();
+  document.title = 'StediMail';
   show('signin');
 }
 
@@ -1365,8 +1366,9 @@ async function renameUserLabel(l) {
 
 // ---------- Feedback: a tester's bug report or request, sent from their own Gmail ----------
 // Goes to the beta address (forwarded to Paul). Shows exactly what is sent before sending; no email
-// content is ever included, only what the tester types and the technical details listed.
+// content is included, only what the tester types, the technical details listed, and any screenshot they attach.
 const REPORT_TO = 'beta@stedimail.com';
+const REPORT_SHOT_LIMIT = 10e6;
 const recentErrors = [];
 window.addEventListener('error', (e) => { recentErrors.push(`${new Date().toISOString()} ${e.message} (${(e.filename || '').split('/').pop()}:${e.lineno})`); recentErrors.splice(0, recentErrors.length - 10); });
 window.addEventListener('unhandledrejection', (e) => { recentErrors.push(`${new Date().toISOString()} ${e.reason?.message || e.reason}`); recentErrors.splice(0, recentErrors.length - 10); });
@@ -1406,18 +1408,41 @@ function openReport() {
       placeholder: kind === 'issue' ? 'What happened, and what did you expect? (Voice typing works here.)'
         : 'What would you like StediMail to do? (Voice typing works here.)' });
     const details = reportDetails();
-    const show = el('details', {}, [el('summary', {}, 'What else is sent (no emails are included)'),
+    const show = el('details', {}, [el('summary', {}, 'What else is sent (no emails, apart from any on your screenshot)'),
       el('pre', {}, `To: ${REPORT_TO}\nFrom: your Gmail${state.me ? ' (' + state.me + ')' : ''}\n\n${details}`)]);
+    // One screenshot, picked from a file or pasted. It can show emails, so it's shown here before it's sent.
+    let shot = null;
+    const shotBox = el('div', { class: 'report-shot' });
+    const picker = el('input', { type: 'file', accept: 'image/*', hidden: '' });
+    const attach = el('button', { type: 'button' }, 'Attach screenshot');
+    const useShot = (file) => {
+      if (!file.type.startsWith('image/')) { toast('Please choose a picture.'); return; }
+      if (file.size > REPORT_SHOT_LIMIT) { toast(`That picture is too big (${fileSize(file.size)}). The limit is ${fileSize(REPORT_SHOT_LIMIT)}.`); return; }
+      shot = file;
+      const remove = el('button', { type: 'button' }, 'Remove screenshot');
+      remove.addEventListener('click', () => { shot = null; shotBox.replaceChildren(attach); attach.focus(); });
+      shotBox.replaceChildren(
+        el('img', { src: URL.createObjectURL(file), alt: 'The screenshot you are sending' }),
+        el('p', { class: 'hint' }, 'Check that it doesn\u2019t show anything private. Any emails on it are sent too.'),
+        remove);
+    };
+    attach.addEventListener('click', () => picker.click());
+    picker.addEventListener('change', () => { if (picker.files[0]) useShot(picker.files[0]); picker.value = ''; });
+    dlg.onpaste = (e) => {
+      const file = [...e.clipboardData.files].find((f) => f.type.startsWith('image/'));
+      if (file) { e.preventDefault(); useShot(file); }
+    };
+    shotBox.append(attach);
     const back = el('button', { type: 'button' }, 'Back');
     const send = el('button', { type: 'button', class: 'primary' }, 'Send');
-    back.addEventListener('click', choose);
+    back.addEventListener('click', () => { dlg.onpaste = null; choose(); });
     send.addEventListener('click', async () => {
       const said = text.value.trim();
       if (!said) { text.focus(); toast('Please say what happened first.'); return; }
       send.disabled = true; send.textContent = 'Sending…';
       const subject = `[StediMail ${kind}] ${said.split(/\s+/).slice(0, 8).join(' ')}${said.split(/\s+/).length > 8 ? '…' : ''}`;
       try {
-        await sendMail({ To: REPORT_TO, Subject: subject }, `${said}\n\n---\n${details}\n`);
+        await sendMail({ To: REPORT_TO, Subject: subject }, `${said}\n\n---\n${details}\n`, undefined, shot ? { files: [shot] } : {});
         close();
         toast('Sent. Thank you!');
       } catch (e) {
@@ -1425,7 +1450,7 @@ function openReport() {
         if (!(e instanceof AuthError)) toast('Could not send: ' + e.message);
       }
     });
-    dlg.replaceChildren(el('h2', {}, kind === 'issue' ? 'Something’s wrong' : 'I have a request'), text, show,
+    dlg.replaceChildren(el('h2', {}, kind === 'issue' ? 'Something’s wrong' : 'I have a request'), text, shotBox, picker, show,
       el('div', { class: 'ask-buttons' }, [back, send]));
     text.focus();
   };
@@ -1541,6 +1566,24 @@ async function checkReturned() {
   store.set('bumps', state.bumps);
 }
 
+// A collapsed column can't show a new email, so it turns red until it's opened. New = newer than any email
+// seen on the board, so moving an older card into the column doesn't set it off; Paul's own replies and drafts
+// aren't new mail. The mark survives a reload, and so does what's been seen, so mail that came while
+// StediMail was closed counts too.
+function flagCollapsedNewMail(cols) {
+  const incoming = (id) => { const t = state.threads.get(id); return t && !t.replied && !t.labels.has('DRAFT') ? t : null; };
+  const seen = store.get('newestSeen', null);
+  let newest = seen ?? 0;
+  const marks = new Set(store.get('newMailCols', []));
+  cols.forEach((col, i) => {
+    const dates = (state.board[i] || []).map(incoming).filter(Boolean).map((t) => t.date);
+    newest = Math.max(newest, ...dates);
+    if (seen != null && settings.collapsedCols.includes(col.name) && dates.some((d) => d > seen)) marks.add(col.name);
+  });
+  store.set('newestSeen', newest);
+  store.set('newMailCols', [...marks]);
+}
+
 // True when an email newer than any seen so far reached the Inbox column, so it can be brought into view.
 // Paul's own replies also make a thread newer, but they aren't new mail. Only sorts that put it on top count.
 function inboxGotNewMail(cols) {
@@ -1612,6 +1655,7 @@ async function loadBoard() {
     for (const id of state.search?.ids || []) seen.add(id);
     for (const id of [...state.threads.keys()]) if (!seen.has(id)) state.threads.delete(id);
     assign(cols);
+    flagCollapsedNewMail(cols);
     const newMail = inboxGotNewMail(cols);
     render();
     if (newMail) bringInboxToTop();
@@ -2367,7 +2411,7 @@ function show(view) {
   $('#main-row').hidden = view !== 'board';
   $('#signin').hidden = view !== 'signin';
   $('#setup').hidden = view !== 'setup';
-  for (const id of ['btn-undo', 'btn-downloads', 'btn-compose', 'btn-refresh', 'search-form', 'btn-menu', 'col-picker', 'btn-report']) $('#' + id).hidden = view !== 'board';
+  for (const id of ['btn-undo', 'btn-downloads', 'btn-compose', 'btn-refresh', 'search-form', 'btn-menu', 'col-picker', 'btn-report', 'btn-account']) $('#' + id).hidden = view !== 'board';
   $('#sidebar').hidden = !state.sidebarOpen;
   if (view === 'board') renderSidebar();
 }
@@ -2673,6 +2717,10 @@ function toggleCollapsed(col, node) {
   store.set('collapsedCols', settings.collapsedCols);
   const from = node.offsetWidth;
   node.classList.toggle('collapsed', on);
+  if (!on) {                                // opened: the new mail is in view now
+    store.set('newMailCols', store.get('newMailCols', []).filter((name) => name !== col.name));
+    node.classList.remove('new-mail');
+  }
   // A quick fold, so it's clear what happened to the column.
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   const frame = (width) => ({ flex: `0 0 ${width}px`, width: `${width}px`, minWidth: '0', maxWidth: 'none', overflow: 'hidden' });
@@ -2689,7 +2737,7 @@ function renderColumn(col, i) {
   (closeBtn || sortBtn).classList.add('steady-aim-left');
   const head = el('h2', {}, [columnCheckbox(i), col.name, el('span', { class: 'count' }, ids.length + (state.more[i] ? '+' : '')),
     sortBtn, closeBtn]);
-  const node = el('section', { class: 'column' + (settings.collapsedCols.includes(col.name) ? ' collapsed' : ''), 'data-col': i }, [
+  const node = el('section', { class: 'column' + (settings.collapsedCols.includes(col.name) ? ' collapsed' + (store.get('newMailCols', []).includes(col.name) ? ' new-mail' : '') : ''), 'data-col': i }, [
     head,
     el('div', { class: 'cards' }, ids.map((id) => renderCard(state.threads.get(id), i))),
   ]);
@@ -4515,6 +4563,21 @@ function wireUi() {
   setInterval(watchMailbox, WATCH_MS);
 }
 
+// Which account this is, for anyone with several open: its initial in a color of its own, then the address.
+function showAccount(email) {
+  const btn = $('#btn-account');
+  let hash = 0;
+  for (const c of email) hash = (hash * 31 + c.charCodeAt(0)) % 360;
+  const icon = btn.querySelector('.account-icon');
+  icon.textContent = email[0].toUpperCase();
+  icon.style.background = `hsl(${hash} 55% 38%)`;
+  btn.querySelector('.account-email').textContent = email;
+  btn.title = btn.ariaLabel = `Account: ${email}`;
+  btn.hidden = false;
+  btn.onclick = () => openMenu(btn, [{ heading: email }, { label: 'Sign out', run: signOut }]);
+  document.title = `StediMail - ${email}`;
+}
+
 async function start() {
   // Who actually signed in? A different account than the settings just loaded: load theirs instead, before
   // anything can touch their Gmail. (The sign-in is kept for this tab, so the reload doesn't ask again.)
@@ -4533,6 +4596,7 @@ async function start() {
     settings.columnLabels = {};
     settings.columnsSaved = false;
   }
+  showAccount(email);
   applyColumnWidth(settings.colWidth);
   applyReaderWidth(settings.readerWidth);
   markDownloads(store.get('downloadsUnseen', false));

@@ -367,6 +367,7 @@ body.cols-sized .column { flex: 0 0 var(--col-w); max-width: none; width: var(--
   .column.collapsed > :not(h2), .column.collapsed h2 > * { display: none; }
   .column.collapsed h2 { flex: 1; min-height: 0; margin: 0; padding: .7rem .3rem; writing-mode: vertical-rl; white-space: nowrap; background: transparent; color: var(--bar-text); }
   .column.collapsed.drop h2 { color: var(--text); }
+  .column.collapsed.new-mail, .column.collapsed.new-mail h2 { background: #c62828; color: #fff; }
 }
 .col-resize {
   position: absolute; top: -2px; width: 1rem; height: calc(39px + 1.6rem); z-index: 2; cursor: ew-resize; touch-action: none;
@@ -611,6 +612,9 @@ dialog.report h2 { margin: 0 0 14px; font-size: 20px; }
 .big-choice { padding: 22px 12px; font-size: 18px; font-weight: 600; border-radius: 12px; }
 dialog.report textarea { width: 100%; font: inherit; font-size: 16px; padding: 10px; border-radius: 8px; resize: vertical; }
 dialog.report details { margin-top: 10px; font-size: 14px; }
+dialog.report .report-shot { margin-top: 10px; }
+dialog.report .report-shot img { display: block; max-width: 100%; max-height: 220px; margin-bottom: 8px; border: 1px solid var(--border, #555); border-radius: 8px; }
+dialog.report .report-shot p { margin: 0 0 8px; }
 dialog.report pre { white-space: pre-wrap; font-size: 12px; max-height: 180px; overflow: auto; padding: 8px; border-radius: 8px;
   background: rgba(127,127,127,.12); }
 
@@ -623,3 +627,13 @@ dialog.report pre { white-space: pre-wrap; font-size: 12px; max-height: 180px; o
   background: rgba(220, 60, 60, .16); border: 1px solid rgba(220, 60, 60, .45); color: inherit; }
 .unsub .unsub-btn:hover:not(:disabled) { background: rgba(220, 60, 60, .28); border-color: rgba(220, 60, 60, .7); }
 .unsub .hint { margin: 0; font-size: .63rem; }
+
+/* The signed-in account, set apart from Settings so a shaky click can't land on the wrong one. */
+#btn-account { display: inline-flex; align-items: center; gap: .5rem; margin-left: 1.25rem; padding: .25rem .6rem .25rem .3rem; min-height: 40px; }
+#btn-account[hidden] { display: none; }
+.account-icon { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border-radius: 50%; color: #fff; font-weight: 700; }
+.account-email { max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 1500px) {
+  .account-email { display: none; }
+  #btn-account { padding: .25rem .3rem; }
+}
