@@ -782,6 +782,11 @@ function clearSearch() {
   renderSidebar();
 }
 
+// Sending a draft finishes the job it was opened for, so the Drafts column closes with it.
+function closeDraftsFolder() {
+  if (state.searchArgs?.folder?.label === 'DRAFT') clearSearch();
+}
+
 // ---------- selection & bulk actions ----------
 // Column keys: board column index, or -1 for the search/folder column.
 
@@ -3527,7 +3532,8 @@ function renderReplyBox(last, threadId, draft = null) {
       await shareDriveFiles(rich.driveIds(), h);
       await sendMail(h, c.text, threadId, { html: c.html, files: c.files });
       if (state.replyDraft === me) state.replyDraft = null;      // sent: nothing to keep
-      if (draftId) api(`/drafts/${draftId}`, { method: 'DELETE' }).catch(() => {});
+      if (draftId) await api(`/drafts/${draftId}`, { method: 'DELETE' }).catch(() => {});   // gone before the reload below
+      if (draft) closeDraftsFolder();
       toast('Reply sent');
       if (archiveAfter) { closeReader(); await archiveThread(threadId); } else openThread(threadId);
       loadBoard();
@@ -4017,9 +4023,11 @@ function openCompose(draft = null) {
       await shareDriveFiles(rich.driveIds(), headers());
       await sendMail(headers(), c.text, null, { html: c.html, files: c.files });
       if (state.replyDraft === me) state.replyDraft = null;      // sent: nothing to keep
-      if (draftId) api(`/drafts/${draftId}`, { method: 'DELETE' }).catch(() => {});
+      if (draftId) await api(`/drafts/${draftId}`, { method: 'DELETE' }).catch(() => {});   // gone before the reload below
+      if (draft) closeDraftsFolder();
       toast('Sent');
       closeReader();
+      loadBoard();
     } catch (e) {
       if (!(e instanceof AuthError)) toast('Send failed: ' + e.message);
       send.disabled = false;
