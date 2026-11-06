@@ -2360,7 +2360,7 @@ function show(view) {
   $('#main-row').hidden = view !== 'board';
   $('#signin').hidden = view !== 'signin';
   $('#setup').hidden = view !== 'setup';
-  for (const id of ['btn-undo', 'btn-downloads', 'btn-compose', 'btn-refresh', 'search-form', 'btn-menu', 'col-picker', 'btn-report']) $('#' + id).hidden = view !== 'board';
+  for (const id of ['btn-undo', 'btn-downloads', 'btn-compose', 'btn-refresh', 'search-form', 'btn-menu', 'col-picker', 'btn-report', 'btn-videos']) $('#' + id).hidden = view !== 'board';
   $('#sidebar').hidden = !state.sidebarOpen;
   if (view === 'board') renderSidebar();
 }
