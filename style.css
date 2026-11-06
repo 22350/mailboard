@@ -613,6 +613,7 @@ dialog.report h2 { margin: 0 0 14px; font-size: 20px; }
 dialog.report textarea { width: 100%; font: inherit; font-size: 16px; padding: 10px; border-radius: 8px; resize: vertical; }
 dialog.report details { margin-top: 10px; font-size: 14px; }
 dialog.report .report-shot { margin-top: 10px; }
+dialog.report .report-shot-buttons { display: flex; flex-wrap: wrap; gap: 14px; }
 dialog.report .report-shot img { display: block; max-width: 100%; max-height: 220px; margin-bottom: 8px; border: 1px solid var(--border, #555); border-radius: 8px; }
 dialog.report .report-shot p { margin: 0 0 8px; }
 dialog.report pre { white-space: pre-wrap; font-size: 12px; max-height: 180px; overflow: auto; padding: 8px; border-radius: 8px;
@@ -627,13 +628,3 @@ dialog.report pre { white-space: pre-wrap; font-size: 12px; max-height: 180px; o
   background: rgba(220, 60, 60, .16); border: 1px solid rgba(220, 60, 60, .45); color: inherit; }
 .unsub .unsub-btn:hover:not(:disabled) { background: rgba(220, 60, 60, .28); border-color: rgba(220, 60, 60, .7); }
 .unsub .hint { margin: 0; font-size: .63rem; }
-
-/* The signed-in account, set apart from Settings so a shaky click can't land on the wrong one. */
-#btn-account { display: inline-flex; align-items: center; gap: .5rem; margin-left: 1.25rem; padding: .25rem .6rem .25rem .3rem; min-height: 40px; }
-#btn-account[hidden] { display: none; }
-.account-icon { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border-radius: 50%; color: #fff; font-weight: 700; }
-.account-email { max-width: 16rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-@media (max-width: 1500px) {
-  .account-email { display: none; }
-  #btn-account { padding: .25rem .3rem; }
-}

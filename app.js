@@ -1369,6 +1369,7 @@ async function renameUserLabel(l) {
 // content is included, only what the tester types, the technical details listed, and any screenshot they attach.
 const REPORT_TO = 'beta@stedimail.com';
 const REPORT_SHOT_LIMIT = 10e6;
+const SCREENSHOT_SETTLE_MS = 500;   // the browser's share window has to finish closing
 const recentErrors = [];
 window.addEventListener('error', (e) => { recentErrors.push(`${new Date().toISOString()} ${e.message} (${(e.filename || '').split('/').pop()}:${e.lineno})`); recentErrors.splice(0, recentErrors.length - 10); });
 window.addEventListener('unhandledrejection', (e) => { recentErrors.push(`${new Date().toISOString()} ${e.reason?.message || e.reason}`); recentErrors.splice(0, recentErrors.length - 10); });
@@ -1410,29 +1411,57 @@ function openReport() {
     const details = reportDetails();
     const show = el('details', {}, [el('summary', {}, 'What else is sent (no emails, apart from any on your screenshot)'),
       el('pre', {}, `To: ${REPORT_TO}\nFrom: your Gmail${state.me ? ' (' + state.me + ')' : ''}\n\n${details}`)]);
-    // One screenshot, picked from a file or pasted. It can show emails, so it's shown here before it's sent.
+    // One screenshot: taken here, picked from a file or pasted. It can show emails, so it's shown here before it's sent.
     let shot = null;
     const shotBox = el('div', { class: 'report-shot' });
     const picker = el('input', { type: 'file', accept: 'image/*', hidden: '' });
     const attach = el('button', { type: 'button' }, 'Attach screenshot');
+    const take = el('button', { type: 'button' }, 'Take screenshot');
+    const shotButtons = el('div', { class: 'report-shot-buttons' }, [...(navigator.mediaDevices?.getDisplayMedia ? [take] : []), attach]);
     const useShot = (file) => {
       if (!file.type.startsWith('image/')) { toast('Please choose a picture.'); return; }
       if (file.size > REPORT_SHOT_LIMIT) { toast(`That picture is too big (${fileSize(file.size)}). The limit is ${fileSize(REPORT_SHOT_LIMIT)}.`); return; }
       shot = file;
       const remove = el('button', { type: 'button' }, 'Remove screenshot');
-      remove.addEventListener('click', () => { shot = null; shotBox.replaceChildren(attach); attach.focus(); });
+      remove.addEventListener('click', () => { shot = null; shotBox.replaceChildren(shotButtons); shotButtons.firstChild.focus(); });
       shotBox.replaceChildren(
         el('img', { src: URL.createObjectURL(file), alt: 'The screenshot you are sending' }),
         el('p', { class: 'hint' }, 'Check that it doesn\u2019t show anything private. Any emails on it are sent too.'),
         remove);
     };
     attach.addEventListener('click', () => picker.click());
+    // The browser insists on asking what to share. This box steps aside first, so it isn't in the picture.
+    take.addEventListener('click', async () => {
+      dlg.close();
+      try {
+        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false, preferCurrentTab: true })
+          .catch((e) => { if (e.name === 'NotAllowedError') return null; throw e; });   // null: they said no
+        if (stream) {
+          try {
+            const video = el('video');
+            video.muted = true;
+            video.srcObject = stream;
+            await video.play();
+            await new Promise((done) => setTimeout(done, SCREENSHOT_SETTLE_MS));
+            const canvas = el('canvas', { width: String(video.videoWidth), height: String(video.videoHeight) });
+            canvas.getContext('2d').drawImage(video, 0, 0);
+            const blob = await new Promise((done) => canvas.toBlob(done, 'image/png'));
+            useShot(new File([blob], 'screenshot.png', { type: 'image/png' }));
+          } finally {
+            stream.getTracks().forEach((t) => t.stop());
+          }
+        }
+      } catch (e) {
+        toast('Could not take the screenshot: ' + e.message);
+      }
+      dlg.showModal();
+    });
     picker.addEventListener('change', () => { if (picker.files[0]) useShot(picker.files[0]); picker.value = ''; });
     dlg.onpaste = (e) => {
       const file = [...e.clipboardData.files].find((f) => f.type.startsWith('image/'));
       if (file) { e.preventDefault(); useShot(file); }
     };
-    shotBox.append(attach);
+    shotBox.append(shotButtons);
     const back = el('button', { type: 'button' }, 'Back');
     const send = el('button', { type: 'button', class: 'primary' }, 'Send');
     back.addEventListener('click', () => { dlg.onpaste = null; choose(); });
@@ -2411,7 +2440,7 @@ function show(view) {
   $('#main-row').hidden = view !== 'board';
   $('#signin').hidden = view !== 'signin';
   $('#setup').hidden = view !== 'setup';
-  for (const id of ['btn-undo', 'btn-downloads', 'btn-compose', 'btn-refresh', 'search-form', 'btn-menu', 'col-picker', 'btn-report', 'btn-account']) $('#' + id).hidden = view !== 'board';
+  for (const id of ['btn-undo', 'btn-downloads', 'btn-compose', 'btn-refresh', 'search-form', 'btn-menu', 'col-picker', 'btn-report']) $('#' + id).hidden = view !== 'board';
   $('#sidebar').hidden = !state.sidebarOpen;
   if (view === 'board') renderSidebar();
 }
@@ -4563,21 +4592,6 @@ function wireUi() {
   setInterval(watchMailbox, WATCH_MS);
 }
 
-// Which account this is, for anyone with several open: its initial in a color of its own, then the address.
-function showAccount(email) {
-  const btn = $('#btn-account');
-  let hash = 0;
-  for (const c of email) hash = (hash * 31 + c.charCodeAt(0)) % 360;
-  const icon = btn.querySelector('.account-icon');
-  icon.textContent = email[0].toUpperCase();
-  icon.style.background = `hsl(${hash} 55% 38%)`;
-  btn.querySelector('.account-email').textContent = email;
-  btn.title = btn.ariaLabel = `Account: ${email}`;
-  btn.hidden = false;
-  btn.onclick = () => openMenu(btn, [{ heading: email }, { label: 'Sign out', run: signOut }]);
-  document.title = `StediMail - ${email}`;
-}
-
 async function start() {
   // Who actually signed in? A different account than the settings just loaded: load theirs instead, before
   // anything can touch their Gmail. (The sign-in is kept for this tab, so the reload doesn't ask again.)
@@ -4596,7 +4610,7 @@ async function start() {
     settings.columnLabels = {};
     settings.columnsSaved = false;
   }
-  showAccount(email);
+  document.title = `StediMail - ${email}`;   // installed windows show this in their title bar
   applyColumnWidth(settings.colWidth);
   applyReaderWidth(settings.readerWidth);
   markDownloads(store.get('downloadsUnseen', false));
