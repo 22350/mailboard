@@ -1224,6 +1224,7 @@ function renderSidebar() {
     ...shownFolders.map(folderRow),
     ...(state.navMore ? moreFolders.map(folderRow) : []),
     moreFolders.length ? navToggle(state.navMore, () => { state.navMore = !state.navMore; store.set('navMore', state.navMore); renderSidebar(); }) : null,
+    el('div', { class: 'nav-item' }, [el('a', { class: 'nav-main', href: '/videos/', target: '_blank' }, [icon('play'), el('span', { class: 'nav-name' }, 'Demo videos')])]),
     el('div', { class: 'nav-head' }, [el('span', {}, 'Labels'), add]),
     ...shownLabels.map(labelRow),
     ...(state.labelsMore ? moreLabels.map(labelRow) : []),
@@ -2211,6 +2212,7 @@ function el(tag, attrs = {}, children = []) {
 }
 
 const ICONS = {
+  play: 'M8 5v14l11-7z',
   sort: 'M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z',
   mic: 'M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z',
   widen: 'M4 12l4-4v3h8V8l4 4-4 4v-3H8v3z',
@@ -2360,7 +2362,7 @@ function show(view) {
   $('#main-row').hidden = view !== 'board';
   $('#signin').hidden = view !== 'signin';
   $('#setup').hidden = view !== 'setup';
-  for (const id of ['btn-undo', 'btn-downloads', 'btn-compose', 'btn-refresh', 'search-form', 'btn-menu', 'col-picker', 'btn-report', 'btn-videos']) $('#' + id).hidden = view !== 'board';
+  for (const id of ['btn-undo', 'btn-downloads', 'btn-compose', 'btn-refresh', 'search-form', 'btn-menu', 'col-picker', 'btn-report']) $('#' + id).hidden = view !== 'board';
   $('#sidebar').hidden = !state.sidebarOpen;
   if (view === 'board') renderSidebar();
 }

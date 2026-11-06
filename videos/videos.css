@@ -1,0 +1,10 @@
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { min-height: 100vh; box-sizing: border-box; padding: 1.25rem 1rem 3rem; background: #373a2b; color: #fff; font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.logo { display: block; width: 200px; height: auto; margin: 0 auto 1.5rem; }
+#gate { display: grid; justify-items: center; gap: 1rem; margin-top: 3rem; }
+#sign-in { font: inherit; font-weight: 600; min-height: 48px; padding: .6rem 1.4rem; border: 1px solid rgba(255,255,255,.45); border-radius: 8px; background: rgba(255,255,255,.12); color: #fff; cursor: pointer; }
+#sign-in:hover { background: rgba(255,255,255,.22); }
+#gate-note { margin: 0; text-align: center; }
+#films { display: grid; gap: 2rem; justify-items: center; }
+video { display: block; width: min(1280px, 100%, calc((100vh - 120px) * 16 / 9)); height: auto; aspect-ratio: 16 / 9; border-radius: 8px; background: #000; }
