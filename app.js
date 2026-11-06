@@ -1224,7 +1224,7 @@ function renderSidebar() {
     ...shownFolders.map(folderRow),
     ...(state.navMore ? moreFolders.map(folderRow) : []),
     moreFolders.length ? navToggle(state.navMore, () => { state.navMore = !state.navMore; store.set('navMore', state.navMore); renderSidebar(); }) : null,
-    el('div', { class: 'nav-item' }, [el('a', { class: 'nav-main', href: '/videos/', target: '_blank' }, [icon('play'), el('span', { class: 'nav-name' }, 'Demo videos')])]),
+    el('div', { class: 'nav-item nav-demo' }, [el('a', { class: 'nav-main', href: '/videos/', target: '_blank' }, [icon('play'), el('span', { class: 'nav-name' }, 'Demo videos')])]),
     el('div', { class: 'nav-head' }, [el('span', {}, 'Labels'), add]),
     ...shownLabels.map(labelRow),
     ...(state.labelsMore ? moreLabels.map(labelRow) : []),

@@ -94,6 +94,11 @@ a { color: var(--accent); }
 }
 .nav-main:hover:not(:disabled) { background: transparent; }
 a.nav-main { color: var(--text); text-decoration: none; }
+.nav-demo { margin: .5rem -.5rem .25rem 0; border-radius: 0; background: rgba(220, 60, 60, .22); }
+.nav-demo:hover { background: rgba(220, 60, 60, .34); }
+.nav-demo .nav-main { justify-content: center; gap: .4rem; min-height: 38px; padding: .3rem .5rem; border-radius: 0; font-weight: 600; }
+.nav-demo .nav-main svg { fill: var(--text); }
+.nav-demo .nav-name { flex: none; }
 .nav-main svg { width: 20px; height: 20px; flex: none; fill: var(--muted); }
 .nav-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-main .n { font-size: .8rem; }
