@@ -3754,10 +3754,25 @@ function renderMessages(msgs) {
   return box;
 }
 
+// The installed app takes its account's address as its name, so a launcher with several accounts can tell
+// them apart. The site is static, so this account's manifest is built here in the page.
+async function nameAppForAccount(email) {
+  const base = new URL('manifest.webmanifest', location.href);
+  const abs = (u) => new URL(u, base).href;   // a blob: manifest has no address of its own to resolve these against
+  const m = await (await fetch(base)).json();
+  m.name = m.short_name = `StediMail - ${email}`;
+  m.id = abs(m.id);
+  m.start_url = abs(m.start_url);
+  m.scope = abs(m.scope);
+  m.icons = m.icons.map((i) => ({ ...i, src: abs(i.src) }));
+  $('link[rel="manifest"]').href = URL.createObjectURL(new Blob([JSON.stringify(m)], { type: 'application/manifest+json' }));
+}
+
 // "Install StediMail" in the top bar, only in a normal browser tab where the browser can install it
 // (Paul, 2026-11-03: testers opening stedimail.com kept Chrome's address and bookmark bars). Gone once it
 // is installed or opened as an app.
 function setupInstallButton() {
+  if (state.me) nameAppForAccount(state.me).catch(() => {});   // no account yet, or it failed: plain "StediMail"
   const btn = $('#btn-install');
   const asApp = () => matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: window-controls-overlay)').matches
     || navigator.standalone === true;
