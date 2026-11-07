@@ -2993,6 +2993,8 @@ const FRAME_HEAD = '<!doctype html><meta charset="utf-8"><base target="_blank"><
   // The frame is always sized to fit its email, so it never needs a scrollbar of its own. One would narrow
   // the text while it's being measured, and could flicker on and off as the frame changes size.
   'html{overflow-y:hidden!important}' +
+  // Breathing room round the text (Paul, 2026-11-06), even if the email sets its own margins to nothing.
+  'body{padding:14px 18px!important;box-sizing:border-box}' +
   'img{max-width:100%;height:auto}table{max-width:100%}' +
   '#mb-copy{position:absolute;z-index:9;font:12px system-ui,sans-serif;padding:2px 8px;border:1px solid #bbb;' +
   'border-radius:6px;background:#fde2e2;border-color:#f3a5a5;color:#8a1c1c;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.2)}</style>';
